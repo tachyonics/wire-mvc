@@ -25,4 +25,14 @@ struct UsersController: Sendable {
     func delete(@Path id: String) async throws {
         store.delete(id)
     }
+
+    @Get
+    @JSONResponse
+    func list(
+        @Query limit: Int = 10,  // defaulted @Query
+        @Query cursor: String?,  // optional @Query
+        @Header("x-trace") trace: String?  // optional @Header
+    ) async throws -> [User] {
+        store.list(limit: limit)
+    }
 }

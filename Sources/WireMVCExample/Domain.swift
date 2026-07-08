@@ -19,4 +19,7 @@ struct UserStore: Sendable {
 
     func create(_ new: NewUser) -> User { User(id: "99", name: new.name) }
     func delete(_ id: String) {}
+    func list(limit: Int) -> [User] {
+        (0..<limit).map { User(id: "u\($0)", name: "user-\($0)") }
+    }
 }

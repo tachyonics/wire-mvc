@@ -72,13 +72,25 @@ public struct ControllerMacro: ExtensionMacro {
                 )
             }
             let bindingName = binding.name ?? (isWildcard ? internalName : param.firstName.text)
-            let type = param.type.trimmedDescription
-            let bindCall =
-                "\(binding.wrapper)<\(type)>.bind(name: \"\(bindingName)\", request: request, body: requestBody, metadata: metadata)"
-            binds.append("let \(internalName) = try await \(bindCall)")
+            binds.append("let \(internalName) = \(bindExpression(for: param, binding: binding, name: bindingName))")
             callArgs.append(isWildcard ? internalName : "\(param.firstName.text): \(internalName)")
         }
         return (binds, callArgs)
+    }
+
+    /// The binding call for one parameter: `bindOptional` (→ `T?`) for an optional type,
+    /// `bindOptional(...) ?? default` for a defaulted parameter, else the throwing `bind`.
+    private static func bindExpression(for param: FunctionParameterSyntax, binding: Binding, name: String) -> String {
+        let type = param.type.trimmedDescription
+        let args = "name: \"\(name)\", request: request, body: requestBody, metadata: metadata"
+        if type.hasSuffix("?") {
+            let underlying = String(type.dropLast())
+            return "try await \(binding.wrapper)<\(underlying)>.bindOptional(\(args))"
+        }
+        if let defaultValue = param.defaultValue?.value.trimmedDescription {
+            return "try await \(binding.wrapper)<\(type)>.bindOptional(\(args)) ?? \(defaultValue)"
+        }
+        return "try await \(binding.wrapper)<\(type)>.bind(\(args))"
     }
 
     /// The response statement(s): a JSON body (`@JSONResponse`) or an empty status

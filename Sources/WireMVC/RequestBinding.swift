@@ -26,6 +26,24 @@ public protocol RequestBound {
     ) async throws -> Value
 }
 
+extension RequestBound {
+    /// Like `bind`, but returns `nil` when the value is simply absent (a missing path/query/
+    /// header), while still throwing on a type mismatch. Backs optional (`T?`) and defaulted
+    /// (`= expr`) handler parameters.
+    public static func bindOptional(
+        name: String,
+        request: HTTPRequest,
+        body: HTTPBody?,
+        metadata: ServerRequestMetadata
+    ) async throws -> Value? {
+        do {
+            return try await bind(name: name, request: request, body: body, metadata: metadata)
+        } catch let error as WireMVCBindingError where error.isAbsence {
+            return nil
+        }
+    }
+}
+
 /// A binding failure the generated witness maps to a client-error response.
 public enum WireMVCBindingError: Error {
     case missingPathParameter(String)
@@ -52,17 +70,34 @@ public enum WireMVCBindingError: Error {
             return (HTTPResponse(status: .badRequest), nil)  // 400
         }
     }
+
+    /// Whether this failure is a plain absence (vs a type mismatch or content-type error),
+    /// so `bindOptional` can turn it into `nil` for optional/defaulted parameters.
+    var isAbsence: Bool {
+        switch self {
+        case .missingPathParameter, .missingQueryParameter, .missingHeader: return true
+        default: return false
+        }
+    }
 }
 
+// The binding wrappers are *unconstrained* structs so an optional parameter (`@Query x: T?`)
+// is a valid backing `Wrapper<T?>`; the extraction (`RequestBound`/`bind`) lives on a
+// constrained extension, and the macro calls it on the non-optional underlying type
+// (`Wrapper<T>.bind` / `.bindOptional`), so `T: LosslessStringConvertible` is still enforced
+// where it matters. A genuinely non-convertible required parameter is a compile error at the
+// generated `bind` call.
+
 /// `@Path name: T` — binds a `{name}` path template placeholder, converting via
-/// `LosslessStringConvertible`. A non-convertible parameter type is a compile error at the
-/// declaration.
+/// `LosslessStringConvertible`.
 @propertyWrapper
-public struct Path<T: LosslessStringConvertible>: RequestBound {
+public struct Path<T> {
     public var wrappedValue: T
     public init(wrappedValue: T) { self.wrappedValue = wrappedValue }
     public init(wrappedValue: T, _ name: String) { self.wrappedValue = wrappedValue }
+}
 
+extension Path: RequestBound where T: LosslessStringConvertible {
     public static func bind(
         name: String,
         request: HTTPRequest,
@@ -81,11 +116,13 @@ public struct Path<T: LosslessStringConvertible>: RequestBound {
 
 /// `@Query name: T` — binds a query-string item, converting via `LosslessStringConvertible`.
 @propertyWrapper
-public struct Query<T: LosslessStringConvertible>: RequestBound {
+public struct Query<T> {
     public var wrappedValue: T
     public init(wrappedValue: T) { self.wrappedValue = wrappedValue }
     public init(wrappedValue: T, _ name: String) { self.wrappedValue = wrappedValue }
+}
 
+extension Query: RequestBound where T: LosslessStringConvertible {
     public static func bind(
         name: String,
         request: HTTPRequest,
@@ -110,11 +147,13 @@ public struct Query<T: LosslessStringConvertible>: RequestBound {
 
 /// `@Header name: T` — binds an HTTP header value, converting via `LosslessStringConvertible`.
 @propertyWrapper
-public struct Header<T: LosslessStringConvertible>: RequestBound {
+public struct Header<T> {
     public var wrappedValue: T
     public init(wrappedValue: T) { self.wrappedValue = wrappedValue }
     public init(wrappedValue: T, _ name: String) { self.wrappedValue = wrappedValue }
+}
 
+extension Header: RequestBound where T: LosslessStringConvertible {
     public static func bind(
         name: String,
         request: HTTPRequest,
@@ -134,10 +173,12 @@ public struct Header<T: LosslessStringConvertible>: RequestBound {
 /// `@JSONBody name: T` — decodes the JSON request body into `T`. Content-type rules: 415 on a
 /// contradictory `Content-Type`, lenient on a missing one, 422 on malformed JSON.
 @propertyWrapper
-public struct JSONBody<T: Decodable>: RequestBound {
+public struct JSONBody<T> {
     public var wrappedValue: T
     public init(wrappedValue: T) { self.wrappedValue = wrappedValue }
+}
 
+extension JSONBody: RequestBound where T: Decodable {
     public static func bind(
         name: String,
         request: HTTPRequest,

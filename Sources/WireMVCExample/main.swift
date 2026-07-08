@@ -68,6 +68,22 @@ do {
     expect(lenient.status == .created, "POST missing Content-Type  → lenient decode → 201")
 }
 
+// @Get @JSONResponse — @Query default/override + optional @Query/@Header
+do {
+    // No query, no header: defaulted @Query (limit=10), optional @Query/@Header absent → nil, no 400.
+    let (defaulted, body) = try await transport.send(.get, "/users")
+    let count = try JSONDecoder().decode([User].self, from: Data(body)).count
+    expect(
+        defaulted.status == .ok && count == 10,
+        "GET /users  → 200, @Query default (10) + optional @Query/@Header absent"
+    )
+
+    // Override the defaulted @Query, and supply the optional @Header.
+    let (overridden, body2) = try await transport.send(.get, "/users?limit=3", headers: ["x-trace": "abc"])
+    let count2 = try JSONDecoder().decode([User].self, from: Data(body2)).count
+    expect(overridden.status == .ok && count2 == 3, "GET /users?limit=3 (+x-trace)  → 200, @Query override")
+}
+
 if failed {
     print("wire-mvc example FAILED")
     throw ExampleFailed()

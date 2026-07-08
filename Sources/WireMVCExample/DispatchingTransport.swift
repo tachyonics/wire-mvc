@@ -29,6 +29,7 @@ final class DispatchingTransport: ServerTransport, @unchecked Sendable {
         _ method: HTTPRequest.Method,
         _ path: String,
         contentType: String? = nil,
+        headers: [String: String] = [:],
         body: HTTPBody? = nil
     ) async throws -> (HTTPResponse, [UInt8]) {
         let requestSegments = Self.segments(Self.stripQuery(path))
@@ -38,6 +39,9 @@ final class DispatchingTransport: ServerTransport, @unchecked Sendable {
             }
             var fields = HTTPFields()
             if let contentType { fields[.contentType] = contentType }
+            for (name, value) in headers where HTTPField.Name(name) != nil {
+                fields[HTTPField.Name(name)!] = value
+            }
             let request = HTTPRequest(method: method, scheme: nil, authority: nil, path: path, headerFields: fields)
             let (response, responseBody) = try await registration.handler(request, body, .init(pathParameters: params))
             let bytes: [UInt8]
