@@ -1,5 +1,3 @@
-import Foundation
-
 struct User: Codable, Sendable, Equatable {
     let id: String
     let name: String

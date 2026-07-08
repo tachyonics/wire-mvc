@@ -1,10 +1,16 @@
-import Foundation
 import HTTPTypes
 import OpenAPIRuntime
-import WireMVC
+
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 
 // End-to-end: `@Controller` generated `UsersController.registerWireHandlers(on:)`; we register
 // onto a transport and drive real requests through the generated witnesses.
+
+struct ExampleFailed: Error {}
 
 var failed = false
 @MainActor
@@ -19,7 +25,7 @@ try UsersController().registerWireHandlers(on: transport)
 // @Get("/{id}") @JSONResponse — @Path decode, 200, JSON body
 do {
     let (response, body) = try await transport.send(.get, "/users/42")
-    let user = try JSONDecoder().decode(User.self, from: Data(body.utf8))
+    let user = try JSONDecoder().decode(User.self, from: Data(body))
     expect(
         response.status == .ok && user == User(id: "42", name: "Ada"),
         "GET /users/42  → 200, @Path decoded, JSON body"
@@ -34,7 +40,7 @@ do {
         contentType: "application/json",
         body: HTTPBody(#"{"name":"Grace"}"#)
     )
-    let user = try JSONDecoder().decode(User.self, from: Data(body.utf8))
+    let user = try JSONDecoder().decode(User.self, from: Data(body))
     expect(
         response.status == .created && user.name == "Grace",
         "POST /users  → 201, @JSONBody decoded, @JSONResponse(status:)"
@@ -64,6 +70,6 @@ do {
 
 if failed {
     print("wire-mvc example FAILED")
-    exit(1)
+    throw ExampleFailed()
 }
 print("wire-mvc example OK — @Controller generated the ServerTransport witnesses and served every route")

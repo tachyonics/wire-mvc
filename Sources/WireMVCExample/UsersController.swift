@@ -1,5 +1,3 @@
-import HTTPTypes
-import OpenAPIRuntime
 import WireMVC
 
 // A WireMVC controller in its natural declarative shape. `@Controller` walks these routes and

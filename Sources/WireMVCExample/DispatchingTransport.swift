@@ -1,4 +1,3 @@
-import Foundation
 import HTTPTypes
 import OpenAPIRuntime
 
@@ -31,7 +30,7 @@ final class DispatchingTransport: ServerTransport, @unchecked Sendable {
         _ path: String,
         contentType: String? = nil,
         body: HTTPBody? = nil
-    ) async throws -> (HTTPResponse, String) {
+    ) async throws -> (HTTPResponse, [UInt8]) {
         let requestSegments = Self.segments(Self.stripQuery(path))
         for registration in registrations where registration.method == method {
             guard let params = Self.match(template: registration.template, path: requestSegments) else {
@@ -41,16 +40,15 @@ final class DispatchingTransport: ServerTransport, @unchecked Sendable {
             if let contentType { fields[.contentType] = contentType }
             let request = HTTPRequest(method: method, scheme: nil, authority: nil, path: path, headerFields: fields)
             let (response, responseBody) = try await registration.handler(request, body, .init(pathParameters: params))
-            let text: String
+            let bytes: [UInt8]
             if let responseBody {
-                let data = try await Data(collecting: responseBody, upTo: 1_000_000)
-                text = String(bytes: data, encoding: .utf8) ?? ""
+                bytes = Array(try await HTTPBody.ByteChunk(collecting: responseBody, upTo: 1_000_000))
             } else {
-                text = ""
+                bytes = []
             }
-            return (response, text)
+            return (response, bytes)
         }
-        return (HTTPResponse(status: .notFound), "")
+        return (HTTPResponse(status: .notFound), [])
     }
 
     private static func segments(_ path: String) -> [String] {
