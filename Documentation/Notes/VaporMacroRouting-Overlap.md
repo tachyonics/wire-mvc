@@ -10,6 +10,12 @@ proposal — `Sources/VaporMacros`, `Sources/VaporMacrosPlugin`, and its usage i
 `Sources/Development/routes.swift`. The feature is gated behind `#if MacroRouting`
 and targets Vapor 5 (early alpha).
 
+**Status (mid-2026):** the core — `@Controller`, HTTP-verb routing, typed path
+params, and auth-principal middleware — has merged into the Vapor 5 line and looks
+stable. Adjacent areas such as general middleware and controller path prefixes are
+still evolving (some landed, some in progress), so the surface beyond the core may
+shift; treat the specifics below as a point-in-time reading.
+
 ## What the Vapor proposal is
 
 Three macros, emitting Vapor-native code (`RoutesBuilder` / `Request` /
@@ -83,6 +89,55 @@ resolver scopes) live outside its scope.
   constraints) — the difference is that collation is expressed as a first-class
   surface rather than as per-controller registration calls.
 
+## Middleware
+
+Both arrive at the *same surface annotation* — `@Middleware(expr)` at controller
+scope (wraps every route) and route scope (wraps one), stackable with a defined order
+— so at the source level the two look nearly identical. The difference is entirely
+underneath, on the same axis as the binding/DI layers.
+
+(Status: Vapor's auth-principal middleware has merged; general per-route/controller
+`@Middleware` is still evolving, so its shape may change. The design below reflects
+the current proposal. WireMVC's is M5.3 in the plan, interleaved with M5.4.)
+
+- **Composition mechanism.** Vapor splices the `@Middleware` expressions verbatim into
+  `routes.grouped(...)` in the generated `boot` — handed to Vapor's own middleware
+  machinery, wrapping the route at runtime. WireMVC composes middleware as nested
+  closures *around the decoded handler* in the generated witness, over `some
+  ServerTransport`; it does not delegate to a framework's `addMiddleware` (Hummingbird's
+  `RouterMiddleware<Context>` is a different, incompatible protocol), which is what keeps
+  it transport-portable.
+- **Middleware protocol — Vapor's own, not the HTTP proposal's.** Vapor's `@Middleware`
+  is built on Vapor's `Middleware` protocol — `respond(to: Request, chainingTo: any
+  Responder) -> Response`, spliced into `grouped(_ middleware: any Middleware...)`. It is
+  untyped `Request → Response`, with no dependency on swift-http-api-proposal. WireMVC
+  builds on the ecosystem-standard `Middleware<Input, NextInput>` (swift-http-api-
+  proposal): forward-transforming stages plus a terminal, with the handler as the
+  terminal middleware (`NextInput == Void`).
+- **The consequence — value-through-request vs. typed transform.** Because Vapor's
+  middleware has no input/output type parameters, a middleware passes values to the
+  handler only through the request side-channel (`req.auth`, `req.storage`); it wraps
+  *around* the handler and cannot change its typed inputs. WireMVC's typed chain makes
+  type-transformation native and compile-checked: an auth stage's `Input →
+  AuthenticatedInput` must match what the handler requires (the standard
+  `@MiddlewareBuilder`'s `buildPartialBlock` enforces `First.NextInput == Second.Input`),
+  so *removing the auth middleware fails to compile*. Same request-as-context vs.
+  typed-signature split as the binding and DI layers, one level up.
+- **Bridge to request scope.** This is why M5.3 and M5.4 interleave: a type-transforming
+  auth middleware produces the *typed* principal that seeds the request scope a
+  request-scoped controller (§ *Controller lifecycle*) consumes. Vapor's analogue
+  deposits the principal into `req.auth` (untyped side-channel), consumed by a shared
+  singleton controller via `req.auth.require`.
+- **Global (pre-routing) middleware.** Vapor's `@Middleware` is per-route/controller;
+  global middleware stays in Vapor's existing app-level mechanism. WireMVC likewise
+  scopes per-route/controller to M5.3 and defers global middleware to M5.5 (the
+  router-assembly / Tier-2 layer).
+
+Prior art: `@Middleware` as controller/route decoration descends from Spring's
+`HandlerInterceptor` / JAX-RS `@NameBinding` filters (untyped interception); the
+typed-transform property is closer to a typed filter pipeline (Finagle's
+`Filter[ReqIn, RepOut, ReqOut, RepIn]`) than to those.
+
 ## How each relates to prior art
 
 - **Spring MVC** is the shared archetype for both: annotation-driven controllers
@@ -116,6 +171,7 @@ construct it descends from:
 | Response encoding | Spring `@ResponseBody` + message converters | `ResponseEncodable` / `encodeResponse` — framework content system | `@JSONResponse` / `@ResponseStatus` — aligns with `@ResponseBody` / `@ResponseStatus` |
 | Controller registration | Spring component-scan + container | per-controller `app.register(collection:)` — manual, framework-native | `ServerTransport` collation of contributors — container-driven (explicit, not reflective) |
 | Auth principal into handler | Spring Security `@AuthenticationPrincipal` | `@AuthMiddleware(User.self)` → `req.auth.require` | request-scoped principal (M5.4) |
+| Middleware (per-route/controller) | Spring `HandlerInterceptor`; JAX-RS filters | `@Middleware(expr)` → `.grouped(...)`, Vapor `Middleware`, runtime wrap (evolving) | `@Middleware(expr)` composed around decoded handler, typed `Middleware<Input, NextInput>` (M5.3) |
 
 **The pattern the column reveals:** each proposal is the natural shape of its host
 philosophy. Vapor's rows lean *framework-native* — its own content system, manual
