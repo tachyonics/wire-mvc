@@ -32,7 +32,7 @@ struct UsersController: Sendable {
         @Query limit: Int = 10,  // defaulted @Query
         @Query cursor: String?,  // optional @Query
         @Header("x-trace") trace: String?  // optional @Header
-    ) async throws -> [User] {
-        store.list(limit: limit)
+    ) async throws -> Listing {
+        Listing(limit: limit, cursor: cursor, trace: trace, users: store.list(limit: limit))
     }
 }

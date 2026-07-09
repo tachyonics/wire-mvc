@@ -7,6 +7,15 @@ struct NewUser: Codable, Sendable {
     let name: String
 }
 
+/// Echoes the bound query/header values back, so the example can assert they were actually
+/// received (not just that their absence is tolerated).
+struct Listing: Codable, Sendable, Equatable {
+    let limit: Int
+    let cursor: String?
+    let trace: String?
+    let users: [User]
+}
+
 /// Stands in for an `@Inject`ed dependency Wire would construct. Canned so the example
 /// stays focused on routing/codegen, not state.
 struct UserStore: Sendable {

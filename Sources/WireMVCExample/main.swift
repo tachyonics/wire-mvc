@@ -68,20 +68,29 @@ do {
     expect(lenient.status == .created, "POST missing Content-Type  → lenient decode → 201")
 }
 
-// @Get @JSONResponse — @Query default/override + optional @Query/@Header
+// @Get @JSONResponse — @Query default/override + optional @Query/@Header, present and absent
 do {
-    // No query, no header: defaulted @Query (limit=10), optional @Query/@Header absent → nil, no 400.
+    // Nothing supplied: defaulted @Query (limit=10); optional @Query/@Header absent → nil.
     let (defaulted, body) = try await transport.send(.get, "/users")
-    let count = try JSONDecoder().decode([User].self, from: Data(body)).count
+    let listing = try JSONDecoder().decode(Listing.self, from: Data(body))
     expect(
-        defaulted.status == .ok && count == 10,
-        "GET /users  → 200, @Query default (10) + optional @Query/@Header absent"
+        defaulted.status == .ok && listing.limit == 10 && listing.cursor == nil && listing.trace == nil
+            && listing.users.count == 10,
+        "GET /users  → 200, @Query default (10), optional @Query/@Header absent → nil"
     )
 
-    // Override the defaulted @Query, and supply the optional @Header.
-    let (overridden, body2) = try await transport.send(.get, "/users?limit=3", headers: ["x-trace": "abc"])
-    let count2 = try JSONDecoder().decode([User].self, from: Data(body2)).count
-    expect(overridden.status == .ok && count2 == 3, "GET /users?limit=3 (+x-trace)  → 200, @Query override")
+    // All supplied: overridden @Query, and the optional @Query + @Header actually bound.
+    let (supplied, body2) = try await transport.send(
+        .get,
+        "/users?limit=3&cursor=c1",
+        headers: ["x-trace": "abc"]
+    )
+    let listing2 = try JSONDecoder().decode(Listing.self, from: Data(body2))
+    expect(
+        supplied.status == .ok && listing2.limit == 3 && listing2.cursor == "c1" && listing2.trace == "abc"
+            && listing2.users.count == 3,
+        "GET /users?limit=3&cursor=c1 (+x-trace)  → 200, @Query override + optional @Query/@Header received"
+    )
 }
 
 if failed {
