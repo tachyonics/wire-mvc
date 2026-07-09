@@ -68,6 +68,31 @@ do {
     expect(lenient.status == .created, "POST missing Content-Type  → lenient decode → 201")
 }
 
+// @Get @JSONResponse — @Query default/override + optional @Query/@Header, present and absent
+do {
+    // Nothing supplied: defaulted @Query (limit=10); optional @Query/@Header absent → nil.
+    let (defaulted, body) = try await transport.send(.get, "/users")
+    let listing = try JSONDecoder().decode(Listing.self, from: Data(body))
+    expect(
+        defaulted.status == .ok && listing.limit == 10 && listing.cursor == nil && listing.trace == nil
+            && listing.users.count == 10,
+        "GET /users  → 200, @Query default (10), optional @Query/@Header absent → nil"
+    )
+
+    // All supplied: overridden @Query, and the optional @Query + @Header actually bound.
+    let (supplied, body2) = try await transport.send(
+        .get,
+        "/users?limit=3&cursor=c1",
+        headers: ["x-trace": "abc"]
+    )
+    let listing2 = try JSONDecoder().decode(Listing.self, from: Data(body2))
+    expect(
+        supplied.status == .ok && listing2.limit == 3 && listing2.cursor == "c1" && listing2.trace == "abc"
+            && listing2.users.count == 3,
+        "GET /users?limit=3&cursor=c1 (+x-trace)  → 200, @Query override + optional @Query/@Header received"
+    )
+}
+
 if failed {
     print("wire-mvc example FAILED")
     throw ExampleFailed()
