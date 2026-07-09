@@ -50,3 +50,14 @@ generated `ServerTransport` witness end-to-end, without the swift-wire graph col
   fold into one key (migrating wire-open-api onto it).
 
 Validated on macOS and Linux (see CI).
+
+## Related work
+
+Vapor 5 has an experimental macro-based `@Controller` router of its own (behind
+`#if MacroRouting`). The two overlap on the routing-annotation surface (controllers,
+HTTP verbs, path params) but differ architecturally: Vapor centres per-request
+context on the `Request` object, while WireMVC centres a DI container — so
+`@Inject`/`@Singleton` dependency injection, request-scoped controllers, and
+cross-runtime mounting are WireMVC concerns without a proposal-level equivalent. See
+[Documentation/Notes/VaporMacroRouting-Overlap.md](Documentation/Notes/VaporMacroRouting-Overlap.md)
+for the full comparison and how each relates to prior art.
