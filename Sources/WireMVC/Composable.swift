@@ -1,3 +1,4 @@
+import HTTPTypes
 import OpenAPIRuntime
 import Wire
 
@@ -25,5 +26,22 @@ public enum WireMVC {
         for contributor in graph.handlers {
             try contributor.registerWireHandlers(on: transport)
         }
+    }
+
+    /// Register a `GET` endpoint serving the graph's wiring model (`introspect()`) as JSON onto a
+    /// user-owned transport. Because the target is any `ServerTransport`, this introspection
+    /// endpoint is cross-runtime — it mounts on Hummingbird, Vapor, or Lambda unchanged, unlike a
+    /// framework-specific one. Mount it where you want (e.g. behind the app's own auth).
+    public static func mountIntrospection(
+        for graph: some Introspectable,
+        on transport: some ServerTransport,
+        at path: String = "/wiring"
+    ) throws {
+        let model = graph.introspect()
+        try transport.register(
+            { _, _, _ in try WireMVCResponse.json(model, status: .ok) },
+            method: .get,
+            path: path
+        )
     }
 }

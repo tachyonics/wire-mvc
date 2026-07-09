@@ -1,3 +1,4 @@
+import Wire  // WiringModel (for the /wiring check)
 import WireMVC
 
 #if canImport(FoundationEssentials)
@@ -22,6 +23,7 @@ func expect(_ condition: Bool, _ label: String) {
 let graph = try await Wire.bootstrap()
 let transport = DispatchingTransport()
 try WireMVC.apply(graph, to: transport)
+try WireMVC.mountIntrospection(for: graph, on: transport)
 
 // @Get("/{id}") @JSONResponse — @Path decode, 200, JSON body
 do {
@@ -91,6 +93,16 @@ do {
         supplied.status == .ok && listing2.limit == 3 && listing2.cursor == "c1" && listing2.trace == "abc"
             && listing2.users.count == 3,
         "GET /users?limit=3&cursor=c1 (+x-trace)  → 200, @Query override + optional @Query/@Header received"
+    )
+}
+
+// WireMVC.mountIntrospection — the graph's wiring model, served cross-runtime over the transport.
+do {
+    let (response, body) = try await transport.send(.get, "/wiring")
+    let model = try JSONDecoder().decode(WiringModel.self, from: Data(body))
+    expect(
+        response.status == .ok && model.bindings.contains { $0.type.contains("UsersController") },
+        "GET /wiring  → 200, WiringModel lists the collated UsersController"
     )
 }
 
