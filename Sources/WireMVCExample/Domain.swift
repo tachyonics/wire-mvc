@@ -1,3 +1,5 @@
+import Wire
+
 struct User: Codable, Sendable, Equatable {
     let id: String
     let name: String
@@ -16,10 +18,13 @@ struct Listing: Codable, Sendable, Equatable {
     let users: [User]
 }
 
-/// Stands in for an `@Inject`ed dependency Wire would construct. Canned so the example
-/// stays focused on routing/codegen, not state.
+/// Wire constructs this `@Singleton` and injects it into the controller. Canned so the
+/// example stays focused on routing/codegen, not state.
+@Singleton
 struct UserStore: Sendable {
     struct NotFound: Error {}
+
+    @Inject init() {}
 
     func find(_ id: String) throws -> User {
         guard id == "42" else { throw NotFound() }

@@ -1,12 +1,14 @@
+import Wire
 import WireMVC
 
-// A WireMVC controller in its natural declarative shape. `@Controller` walks these routes and
-// generates the `TransportContributor` witness (the extension below is macro-generated). In a
-// graph-integrated app this would also be `@Singleton` and collated by Wire; here it's
-// constructed directly in main.swift to prove the macro + witness in isolation.
+// A WireMVC controller in its natural declarative shape. `@Singleton` makes it a graph
+// binding; `@Controller` walks these routes and generates the `TransportContributor` witness
+// (the extension is macro-generated), and its `@Contributes` alias collates the controller so
+// `Wire.bootstrap()` + `WireMVC.apply` register its routes.
+@Singleton
 @Controller("/users")
 struct UsersController: Sendable {
-    let store = UserStore()
+    @Inject var store: UserStore
 
     @Get("/{id}")
     @JSONResponse

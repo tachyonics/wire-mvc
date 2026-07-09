@@ -38,14 +38,16 @@ for the milestone.
 
 ## Status
 
-Under construction (M5.1). This first cut is **self-contained** — it proves the macro and the
-generated `ServerTransport` witness end-to-end, without the swift-wire graph collation yet.
+Under construction (M5.1).
 
 - **M5.1a** — the member-walking `@Controller` macro + the `RequestBound` bindings + the
-  generated witness, served through a `ServerTransport` in `WireMVCExample`. **Current.**
+  generated witness, served through a `ServerTransport` in `WireMVCExample`. **Done.**
 - **M5.1b** — swift-wire graph integration: `@Singleton` + the `@Contributes` alias +
-  `TransportComposable` conformance + `Wire.bootstrap()` + `WireMVC.apply`.
+  `TransportComposable` conformance + `Wire.bootstrap()` + `WireMVC.apply`. **Done** —
+  `WireMVCExample` now bootstraps the graph, which constructs `UserStore`, injects it into the
+  collated `UsersController`, and applies its routes onto the transport.
 - **M5.1c** — example ports (`hello`, `todos`) + live cross-runtime on Hummingbird + Vapor.
+  **Current.**
 - **M5.1d** — extract the shared `ServerTransport` collation surface so WireMVC and WireOpenAPI
   fold into one key (migrating wire-open-api onto it).
 
