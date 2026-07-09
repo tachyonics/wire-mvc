@@ -1,5 +1,4 @@
-import HTTPTypes
-import OpenAPIRuntime
+import WireMVC
 
 #if canImport(FoundationEssentials)
 import FoundationEssentials
@@ -7,8 +6,9 @@ import FoundationEssentials
 import Foundation
 #endif
 
-// End-to-end: `@Controller` generated `UsersController.registerWireHandlers(on:)`; we register
-// onto a transport and drive real requests through the generated witnesses.
+// End-to-end through the graph: `Wire.bootstrap()` builds the graph (constructing `UserStore`
+// and injecting it into the collated `UsersController`); `WireMVC.apply` registers the
+// controller's generated routes onto a transport, which we then drive with real requests.
 
 struct ExampleFailed: Error {}
 
@@ -19,8 +19,9 @@ func expect(_ condition: Bool, _ label: String) {
     if !condition { failed = true }
 }
 
+let graph = try await Wire.bootstrap()
 let transport = DispatchingTransport()
-try UsersController().registerWireHandlers(on: transport)
+try WireMVC.apply(graph, to: transport)
 
 // @Get("/{id}") @JSONResponse — @Path decode, 200, JSON body
 do {

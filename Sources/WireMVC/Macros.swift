@@ -1,9 +1,18 @@
 import HTTPTypes
+import Wire
 
 // The WireMVC annotation surface. `@Controller` is the one macro that does work — it walks
 // the controller's routes and generates the `TransportContributor` witness. The verb, param,
 // and response annotations are markers `@Controller` reads (verbs/responses are no-op peer
 // macros; the param bindings are `@propertyWrapper`s in RequestBinding.swift).
+
+/// Tells Wire that `@Controller` aliases `@Contributes(to: TransportKeys.handlers)`, so a
+/// controller needs only `@Singleton @Controller` — the plugin collates it without a separate
+/// `@Contributes`.
+public let wireMVCControllerAlias = WireAdapterAnnotationV1(
+    annotation: "Controller",
+    contributesTo: TransportKeys.handlers
+)
 
 /// Generates a `TransportContributor` conformance registering each `@Get`/`@Post`/… route
 /// onto a `ServerTransport`, under the optional path prefix. `@Singleton @Controller("/users")`
