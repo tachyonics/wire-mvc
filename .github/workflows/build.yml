@@ -35,6 +35,32 @@ jobs:
       - name: SwiftLint unused imports
         run: swiftlint analyze --strict --quiet --compiler-log-path build.log
 
+  Swift64Nightly:
+    name: Swift 6.4 nightly / swift-syntax 604-prerelease
+    # Early warning that the @Controller macro, its generated ServerTransport witnesses, and the
+    # end-to-end example build and run on the upcoming Swift 6.4 toolchain against the swift-syntax
+    # 604 line it ships with — the version a real 6.4 adopter uses. 604 is still pre-release,
+    # tracked via its release/6.4.x branch because SPM version ranges don't resolve pre-release
+    # tags (the branch pin also overrides swift-wire's transitive 603..<604 requirement). Uses the
+    # nightly 6.4 container since SwiftyLab/setup-swift only installs released toolchains; the
+    # release compiler on the default swift-syntax 603 is covered by the BuildLinux/EndToEnd jobs.
+    runs-on: ubuntu-24.04
+    container: swiftlang/swift:nightly-6.4.x-noble
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install dependencies
+        run: apt-get update && apt-get install -y libssl-dev
+      - name: Pin swift-syntax to the 604 (release/6.4.x) line
+        run: |
+          sed -i 's|"603.0.0"..<"604.0.0"|branch: "release/6.4.x"|' Package.swift
+          grep swift-syntax Package.swift
+      - name: Resolve dependencies
+        run: swift package update
+      - name: Build
+        run: swift build -c release -Xswiftc -strict-concurrency=complete
+      - name: Run end-to-end example
+        run: swift run WireMVCExample
+
   EndToEnd:
     name: End-to-end example / ${{ matrix.os }}
     strategy:
