@@ -162,13 +162,46 @@ extension Query: RequestBound where T: LosslessStringConvertible {
         for pair in query.split(separator: "&") {
             let keyValue = pair.split(separator: "=", maxSplits: 1)
             guard String(keyValue[0]) == name else { continue }
-            let raw = keyValue.count > 1 ? (String(keyValue[1]).removingPercentEncoding ?? String(keyValue[1])) : ""
+            let raw = keyValue.count > 1 ? percentDecoded(keyValue[1]) : ""
             guard let value = T(raw) else {
                 throw WireMVCBindingError.queryParameterTypeMismatch(name, raw)
             }
             return value
         }
         throw WireMVCBindingError.missingQueryParameter(name)
+    }
+}
+
+/// Percent-decode a query value (`%XX` escapes), without full Foundation's `removingPercentEncoding`
+/// — which isn't in FoundationEssentials, the module the Linux toolchain resolves here. Keeps query
+/// binding identical on macOS and Linux. Malformed escapes are passed through byte-for-byte.
+private func percentDecoded(_ input: Substring) -> String {
+    let source = Array(input.utf8)
+    var bytes: [UInt8] = []
+    bytes.reserveCapacity(source.count)
+    var index = 0
+    while index < source.count {
+        if source[index] == UInt8(ascii: "%"), index + 2 < source.count,
+            let highNibble = hexNibble(source[index + 1]), let lowNibble = hexNibble(source[index + 2])
+        {
+            bytes.append(highNibble << 4 | lowNibble)
+            index += 3
+        } else {
+            bytes.append(source[index])
+            index += 1
+        }
+    }
+    // String(bytes:encoding:) needs full Foundation (absent on Linux); this stdlib UTF-8 decode is intended.
+    // swiftlint:disable:next optional_data_string_conversion
+    return String(decoding: bytes, as: UTF8.self)
+}
+
+private func hexNibble(_ byte: UInt8) -> UInt8? {
+    switch byte {
+    case UInt8(ascii: "0")...UInt8(ascii: "9"): return byte - UInt8(ascii: "0")
+    case UInt8(ascii: "a")...UInt8(ascii: "f"): return byte - UInt8(ascii: "a") + 10
+    case UInt8(ascii: "A")...UInt8(ascii: "F"): return byte - UInt8(ascii: "A") + 10
+    default: return nil
     }
 }
 
