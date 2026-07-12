@@ -34,7 +34,15 @@ let package = Package(
     name: "wire-mvc",
     platforms: [.macOS(.v26)],
     products: [
-        .library(name: "WireMVC", targets: ["WireMVC"])
+        .library(name: "WireMVC", targets: ["WireMVC"]),
+        .library(name: "WireMVCServerTransport", targets: ["WireMVCServerTransport"]),
+    ],
+    traits: [
+        // Opt-in ServerTransport (swift-openapi-runtime) compatibility. Off by default, so the core
+        // stays proposal-only and doesn't resolve OpenAPIRuntime; enable it to use the
+        // `WireMVCServerTransport` adapter, which serves proposal-native WireMVC controllers on a
+        // `some ServerTransport` (Hummingbird/Vapor via swift-openapi-hummingbird/-vapor).
+        .trait(name: "ServerTransport")
     ],
     dependencies: [
         .package(url: "https://github.com/tachyonics/swift-wire.git", branch: "main"),
@@ -48,6 +56,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.6.0"),
         .package(url: "https://github.com/swift-server/swift-http-server.git", branch: "main"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.13.2"),
+        .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.7.0"),
         .package(url: "https://github.com/swiftlang/swift-syntax", branch: "release/6.4.x"),
     ],
     targets: [
@@ -85,6 +94,31 @@ let package = Package(
             ],
             swiftSettings: proposalSettings,
             plugins: [.plugin(name: "WireBuildPlugin", package: "swift-wire")]
+        ),
+        // Opt-in ServerTransport adapter — gated on the `ServerTransport` trait, so OpenAPIRuntime is
+        // pruned from resolution unless a consumer enables it. Its sources are `#if ServerTransport`,
+        // so the target compiles to an empty module when the trait is off.
+        .target(
+            name: "WireMVCServerTransport",
+            dependencies: [
+                "WireMVC",
+                .product(name: "Wire", package: "swift-wire"),
+                .product(name: "HTTPAPIs", package: "swift-http-api-proposal"),
+                .product(name: "AsyncStreaming", package: "swift-async-algorithms"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "BasicContainers", package: "swift-collections"),
+                .product(
+                    name: "OpenAPIRuntime",
+                    package: "swift-openapi-runtime",
+                    condition: .when(traits: ["ServerTransport"])
+                ),
+            ],
+            swiftSettings: proposalSettings
+        ),
+        .testTarget(
+            name: "WireMVCServerTransportTests",
+            dependencies: ["WireMVCServerTransport"],
+            swiftSettings: proposalSettings
         ),
     ]
 )
