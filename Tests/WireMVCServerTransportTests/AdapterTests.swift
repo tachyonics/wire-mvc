@@ -147,10 +147,14 @@ struct StreamingController: RouteContributor {
             var fields = HTTPFields()
             fields[.contentType] = "text/event-stream"
             var writer = try await responseSender.send(HTTPResponse(status: .ok, headerFields: fields))
-            while true {
+            // Cancellation-aware, as a real SSE handler must be: when the transport releases the body
+            // (client disconnect), the bound handler task is cancelled and the loop exits.
+            while !Task.isCancelled {
                 var chunk = UniqueArray<UInt8>(copying: await source.next())
                 try await writer.write(buffer: &chunk)
             }
+            var end = UniqueArray<UInt8>()
+            try await writer.finish(buffer: &end, finalElement: nil)
         }
     }
 }

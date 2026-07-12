@@ -28,6 +28,12 @@ import Foundation
 // fast path that keeps a known-length body (`Content-Length`, not chunked). Proven end-to-end in
 // swift-wire-spikes/spike-14.
 //
+// A `ServerTransport` handler must outlive the `register` closure (it produces the streamed body the
+// framework consumes afterward), so it runs in a task that can't be a structured child. For a streamed
+// response that task's lifetime is bound to the returned body — released (and cancelled) when the
+// transport is done with or drops the body — so a client disconnect doesn't leak a handler parked on
+// backpressure.
+//
 // The bridge types are ordinary *copyable* structs: `AsyncReader`/`HTTPResponseSender`/
 // `CallerAsyncWriter` are `~Copyable`/`~Escapable`, but that relaxes the constraint (conformers may be
 // non-copyable), it doesn't require it.
@@ -162,6 +168,17 @@ private struct BridgeWriter: CallerAsyncWriter {
     }
 }
 
+/// Cancels the producing handler task when the response body it feeds is released. A `ServerTransport`
+/// handler must outlive the `register` closure (it produces the streamed body the framework consumes
+/// afterward), so it can't be a structured child; binding it to the body instead means a stream the
+/// transport stops consuming (client disconnect) cancels the handler rather than parking it forever on
+/// backpressure. On normal completion the task has already finished and `cancel()` is a no-op.
+private final class HandlerTaskHandle: Sendable {
+    private let task: Task<Void, Never>
+    init(_ task: Task<Void, Never>) { self.task = task }
+    deinit { task.cancel() }
+}
+
 /// A copyable `HTTPResponseSender`. `sendAndFinish` (one-shot — the typed path) is fused into a
 /// known-length response; `send(_:)` (the raw/streaming path) hands back a streaming writer.
 private struct BridgeResponseSender: HTTPResponseSender {
@@ -227,7 +244,11 @@ private struct ServerTransportRouteBuilder: RoutableHTTPServerBuilder {
                         bytes = []
                     }
                     let channel = ResponseChannel()
-                    Task {
+                    // Unstructured by necessity: the handler produces the streamed body the transport
+                    // consumes *after* this closure returns, so it can't be a structured child. For a
+                    // streamed response its lifetime is bound to the returned body (see `StreamedResponseBody`);
+                    // for a one-shot response it finishes before the closure returns.
+                    let task = Task {
                         do {
                             try await handler(
                                 request,
@@ -244,7 +265,12 @@ private struct ServerTransportRouteBuilder: RoutableHTTPServerBuilder {
                     case let .complete(head, responseBytes):
                         return (head, responseBytes.isEmpty ? nil : HTTPBody(Data(responseBytes)))
                     case let .streaming(head):
-                        return (head, HTTPBody(channel.body, length: .unknown, iterationBehavior: .single))
+                        // Bind the handler task's lifetime to the streamed body: the `map` closure
+                        // captures `handle`, so releasing the body (transport done / client disconnect)
+                        // releases `handle`, whose `deinit` cancels the task.
+                        let handle = HandlerTaskHandle(task)
+                        let body = channel.body.map { chunk in withExtendedLifetime(handle) { chunk } }
+                        return (head, HTTPBody(body, length: .unknown, iterationBehavior: .single))
                     case let .failed(error):
                         throw error
                     case .finishedWithoutResponse:
