@@ -6,94 +6,38 @@ on:
   pull_request:
     branches: [ main ]
 
+# wire-mvc is proposal-native and swift-tools-version 6.4: it depends on the swift-http-api-proposal
+# stack (via swift-http-server's NIOHTTPServer) and swift-syntax's pre-release 604 line, so it builds
+# only on a Swift 6.4 toolchain — the build/format jobs run on the nightly 6.4 container, since
+# SwiftyLab/setup-swift installs released toolchains only. swift-syntax 604 is pinned via its
+# release/6.4.x branch in Package.swift (SPM version ranges don't resolve pre-release tags; the
+# branch pin also overrides swift-wire's transitive 603 requirement).
 jobs:
-  BuildLinux:
-    name: Linux / Swift ${{ matrix.swift-version }}
-    strategy:
-      fail-fast: false
-      matrix:
-        swift-version: ["6.3.3"]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - uses: SwiftyLab/setup-swift@v1
-        with:
-          swift-version: ${{ matrix.swift-version }}
-      - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev curl unzip
-      - name: Build
-        run: swift build -c release -Xswiftc -strict-concurrency=complete
-      - name: Build (verbose, for SwiftLint)
-        # -v captures compiler invocations for SwiftLint's unused_import analyzer;
-        # redirected to file to keep the CI log readable.
-        run: swift build -v > build.log 2>&1
-      - name: Install SwiftLint
-        run: |
-          curl -sL https://github.com/realm/SwiftLint/releases/download/0.63.2/swiftlint_linux_amd64.zip -o swiftlint.zip
-          unzip -o swiftlint.zip -d /usr/local/bin
-          chmod +x /usr/local/bin/swiftlint
-      - name: SwiftLint unused imports
-        run: swiftlint analyze --strict --quiet --compiler-log-path build.log
-
-  Swift64Nightly:
-    name: Swift 6.4 nightly / swift-syntax 604-prerelease
-    # Early warning that the @Controller macro, its generated ServerTransport witnesses, and the
-    # end-to-end example build and run on the upcoming Swift 6.4 toolchain against the swift-syntax
-    # 604 line it ships with — the version a real 6.4 adopter uses. 604 is still pre-release,
-    # tracked via its release/6.4.x branch because SPM version ranges don't resolve pre-release
-    # tags (the branch pin also overrides swift-wire's transitive 603..<604 requirement). Uses the
-    # nightly 6.4 container since SwiftyLab/setup-swift only installs released toolchains; the
-    # release compiler on the default swift-syntax 603 is covered by the BuildLinux/EndToEnd jobs.
+  BuildAndRun:
+    name: Swift 6.4 nightly
     runs-on: ubuntu-24.04
     container: swiftlang/swift:nightly-6.4.x-noble
     steps:
       - uses: actions/checkout@v6
       - name: Install dependencies
         run: apt-get update && apt-get install -y libssl-dev
-      - name: Pin swift-syntax to the 604 (release/6.4.x) line
-        run: |
-          sed -i 's|"603.0.0"..<"604.0.0"|branch: "release/6.4.x"|' Package.swift
-          grep swift-syntax Package.swift
-      - name: Resolve dependencies
-        run: swift package update
       - name: Build
-        run: swift build -c release -Xswiftc -strict-concurrency=complete
+        run: swift build
       - name: Run end-to-end example
-        run: swift run WireMVCExample
-
-  EndToEnd:
-    name: End-to-end example / ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-      - uses: SwiftyLab/setup-swift@v1
-        with:
-          swift-version: "6.3.3"
-      - name: Install dependencies (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev
-      - name: Run end-to-end example
-        # @Controller generates the TransportContributor witnesses; the example registers them
-        # on a dispatching ServerTransport and drives every route in-process. Prints
-        # "wire-mvc example OK" or exits non-zero.
+        # @Controller generates the RouteContributor witnesses; Wire collates them; WireMVC.router
+        # turns them into NIOHTTPServer's request handler and the example drives every route over
+        # real HTTP on an ephemeral loopback port. Prints "wire-mvc example OK" or exits non-zero.
         run: swift run WireMVCExample
 
   SwiftFormat:
-    name: swift-format / Swift ${{ matrix.swift-version }}
-    strategy:
-      matrix:
-        swift-version: ["6.3.3"]
+    name: swift-format (6.4 toolchain)
     runs-on: ubuntu-24.04
+    container: swiftlang/swift:nightly-6.4.x-noble
     steps:
       - uses: actions/checkout@v6
-      - uses: SwiftyLab/setup-swift@v1
-        with:
-          swift-version: ${{ matrix.swift-version }}
       - name: Run swift-format
+        # From the 6.4 toolchain so it parses the proposal's ~Copyable / consuming sending syntax
+        # (a released swift-format can't).
         run: swift-format format --recursive --in-place .
       - name: Check for formatting differences
         run: |
@@ -102,6 +46,10 @@ jobs:
 
   SwiftLint:
     name: SwiftLint 0.63.2
+    # `swiftlint lint` is SwiftSyntax-based and parses the 6.4 sources fine, so it needs no toolchain
+    # and runs on a plain runner. (The `unused_import` *analyzer* rule is not run: it drives SourceKit
+    # against the compiler build log, whose 6.4-only flags this SwiftLint's SourceKit rejects — on 6.4
+    # the compiler's own InternalImportsByDefault emits unused-import warnings natively instead.)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
