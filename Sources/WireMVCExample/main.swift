@@ -15,20 +15,16 @@ import FoundationNetworking
 
 // End-to-end through the graph, served on a real proposal server: `Wire.bootstrap()` builds the
 // graph (constructing `UserStore` and injecting it into the collated `UsersController`);
-// `WireMVC.router` turns the collated controllers into the server's request handler; `NIOHTTPServer`
-// serves it on an ephemeral loopback port, which we then drive with real HTTP requests.
+// `WireMVC.apply` registers the collated controllers onto a `WireRouter`, which `NIOHTTPServer`
+// serves on an ephemeral loopback port, which we then drive with real HTTP requests.
 
-struct ExampleFailed: Error {}
-
-// Unbuffered stdout so the per-check lines survive a failing run's `throw`.
-setvbuf(stdout, nil, _IONBF, 0)
-
-// Top-level code runs serially on the main actor, so a single counter is safe to mutate directly.
-nonisolated(unsafe) var failures = 0
-
-func expect(_ condition: Bool, _ label: String) {
-    print(condition ? "  ✓ \(label)" : "  ✗ \(label)")
-    if !condition { failures += 1 }
+/// Thrown on any failed check. Its `description` lists the failures, which the runtime prints to
+/// stderr (unbuffered) — so a failing CI run shows exactly what broke without a stdout-flush dance.
+struct ExampleFailed: Error, CustomStringConvertible {
+    let failures: [String]
+    var description: String {
+        "wire-mvc example FAILED:\n" + failures.map { "  ✗ \($0)" }.joined(separator: "\n")
+    }
 }
 
 /// One real HTTP request against the loopback server; returns the status code and body bytes.
@@ -68,13 +64,23 @@ try await withThrowingTaskGroup(of: Void.self) { group in
     group.addTask { try await server.serve(handler: router) }
 
     let addresses = try await server.listeningAddresses
-    guard let port = addresses.first?.port else { throw ExampleFailed() }
+    guard let port = addresses.first?.port else {
+        throw ExampleFailed(failures: ["server did not bind a listening port"])
+    }
+
+    // Records checks; the enclosing task-group body is serial on the main actor, so a local list
+    // captured by this nested function needs no synchronization.
+    var failed: [String] = []
+    func check(_ condition: Bool, _ label: String) {
+        print(condition ? "  ✓ \(label)" : "  ✗ \(label)")
+        if !condition { failed.append(label) }
+    }
 
     // @Get("/{id}") @JSONResponse — @Path decode, 200, JSON body
     do {
         let (status, body) = try await send("GET", "/users/42", port: port)
         let user = try JSONDecoder().decode(User.self, from: body)
-        expect(
+        check(
             status == 200 && user == User(id: "42", name: "Ada"),
             "GET /users/42  → 200, @Path decoded, JSON body"
         )
@@ -90,7 +96,7 @@ try await withThrowingTaskGroup(of: Void.self) { group in
             body: Data(#"{"name":"Grace"}"#.utf8)
         )
         let user = try JSONDecoder().decode(User.self, from: body)
-        expect(
+        check(
             status == 201 && user.name == "Grace",
             "POST /users  → 201, @JSONBody decoded, @JSONResponse(status:)"
         )
@@ -99,7 +105,7 @@ try await withThrowingTaskGroup(of: Void.self) { group in
     // @Delete("/{id}") @ResponseStatus(.noContent) — 204, no body
     do {
         let (status, body) = try await send("DELETE", "/users/42", port: port)
-        expect(status == 204 && body.isEmpty, "DELETE /users/42  → 204, @ResponseStatus, empty body")
+        check(status == 204 && body.isEmpty, "DELETE /users/42  → 204, @ResponseStatus, empty body")
     }
 
     // @JSONBody content-type rules. (The lenient-on-a-genuinely-missing-Content-Type path is a
@@ -113,7 +119,7 @@ try await withThrowingTaskGroup(of: Void.self) { group in
             contentType: "text/plain",
             body: Data("nope".utf8)
         )
-        expect(wrong == 415, "POST wrong Content-Type  → 415")
+        check(wrong == 415, "POST wrong Content-Type  → 415")
 
         let (bad, _) = try await send(
             "POST",
@@ -122,14 +128,14 @@ try await withThrowingTaskGroup(of: Void.self) { group in
             contentType: "application/json",
             body: Data("{bad".utf8)
         )
-        expect(bad == 422, "POST malformed JSON  → 422")
+        check(bad == 422, "POST malformed JSON  → 422")
     }
 
     // @Get @JSONResponse — @Query default/override + optional @Query/@Header, present and absent
     do {
         let (status, body) = try await send("GET", "/users", port: port)
         let listing = try JSONDecoder().decode(Listing.self, from: body)
-        expect(
+        check(
             status == 200 && listing.limit == 10 && listing.cursor == nil && listing.trace == nil
                 && listing.users.count == 10,
             "GET /users  → 200, @Query default (10), optional @Query/@Header absent → nil"
@@ -142,7 +148,7 @@ try await withThrowingTaskGroup(of: Void.self) { group in
             headers: ["x-trace": "abc"]
         )
         let listing2 = try JSONDecoder().decode(Listing.self, from: body2)
-        expect(
+        check(
             status2 == 200 && listing2.limit == 3 && listing2.cursor == "c1" && listing2.trace == "abc"
                 && listing2.users.count == 3,
             "GET /users?limit=3&cursor=c1 (+x-trace)  → 200, @Query override + optional @Query/@Header received"
@@ -153,19 +159,16 @@ try await withThrowingTaskGroup(of: Void.self) { group in
     do {
         let (status, body) = try await send("GET", "/wiring", port: port)
         let model = try JSONDecoder().decode(WiringModel.self, from: body)
-        expect(
+        check(
             status == 200 && model.bindings.contains { $0.type.contains("UsersController") },
             "GET /wiring  → 200, WiringModel lists the collated UsersController"
         )
     }
 
     group.cancelAll()
+    if !failed.isEmpty { throw ExampleFailed(failures: failed) }
 }
 
-if failures > 0 {
-    print("wire-mvc example FAILED")
-    throw ExampleFailed()
-}
 print(
     "wire-mvc example OK — @Controller generated the RouteContributor witnesses and served every route on NIOHTTPServer"
 )
