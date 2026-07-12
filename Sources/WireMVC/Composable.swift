@@ -1,22 +1,31 @@
+public import ServiceLifecycle
 public import Wire
 
-/// The surface a facade consumes — the collated controllers as route contributors. Wire emits this
-/// conformance on the generated graph, mapping `routeContributors` to the `CollectedKey` (see
-/// `wireRouteConformance`).
-public protocol RouteComposable {
+/// The surface a facade consumes — the graph's collated controllers (as route contributors) and its
+/// app-scoped `ServiceLifecycle` services. Wire emits this conformance on the generated graph, mapping
+/// each member to its `CollectedKey`'s product (see `wireMVCComposition`). The two members are
+/// independent: a graph with controllers but no services (or vice versa) still conforms, the absent
+/// member resolving to an empty collection.
+public protocol WireMVCComposable {
     var routeContributors: [any RouteContributor] { get }
+    var services: [any Service] { get }
 }
 
-/// Tells Wire to emit `extension _WireGraph: RouteComposable`, mapping `routeContributors` to the
-/// `WireMVCKeys.routeContributors` `CollectedKey` product.
-public let wireRouteConformance = WireGraphConformanceV1(
-    conformsTo: (any RouteComposable).self,
-    members: [.init("routeContributors", from: WireMVCKeys.routeContributors)]
+/// Tells Wire to emit `extension _WireGraph: WireMVCComposable`, mapping each member to its
+/// `CollectedKey`'s product — `routeContributors` (from `@Controller`) and `services` (from
+/// `@BackgroundService` / `@Contributes(to: WireMVCKeys.services)`).
+public let wireMVCComposition = WireGraphConformanceV1(
+    conformsTo: (any WireMVCComposable).self,
+    members: [
+        .init("routeContributors", from: WireMVCKeys.routeContributors),
+        .init("services", from: WireMVCKeys.services),
+    ]
 )
 
 public enum WireMVC {
     /// Register the graph's collated controllers onto a route builder — any
-    /// `RoutableHTTPServerBuilder` (a router, an adapter's builder). WireMVC stays router-agnostic,
+    /// `RoutableHTTPServerBuilder` (a router, an adapter's builder) — and return the graph's collated
+    /// app-scoped `ServiceLifecycle` services to hand to the app's `ServiceGroup`. WireMVC stays router-agnostic,
     /// exactly as the old `apply` stayed transport-agnostic over `some ServerTransport`; the concrete
     /// builder — which is also the proposal's `HTTPServerRequestHandler`, so it can serve — is the
     /// caller's:
@@ -24,16 +33,17 @@ public enum WireMVC {
     /// ```swift
     /// let graph = try await Wire.bootstrap()
     /// var router = WireRouter(for: server)   // a concrete RoutableHTTPServerBuilder + handler
-    /// try WireMVC.apply(graph, to: &router)
-    /// try await server.serve(handler: router)
+    /// let services = try WireMVC.apply(graph, to: &router)
+    /// try await server.serve(handler: router)  // run `services` in a ServiceGroup alongside serving
     /// ```
     ///
     /// The inverse (`~Copyable`) requirements are restated here because they don't propagate across
     /// the generic boundary on their own.
+    @discardableResult
     public static func apply<Builder: RoutableHTTPServerBuilder>(
-        _ graph: some RouteComposable,
+        _ graph: some WireMVCComposable,
         to builder: inout Builder
-    ) throws
+    ) throws -> [any Service]
     where
         Builder.RequestContext: ~Copyable,
         Builder.Reader: ~Copyable,
@@ -43,6 +53,7 @@ public enum WireMVC {
         for contributor in graph.routeContributors {
             try contributor.registerWireRoutes(on: &builder)
         }
+        return graph.services
     }
 
     /// Register a `GET` endpoint serving the graph's wiring model (`introspect()`) as JSON onto a

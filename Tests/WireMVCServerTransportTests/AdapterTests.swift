@@ -4,6 +4,7 @@ import BasicContainers
 import HTTPAPIs
 import HTTPTypes
 import OpenAPIRuntime
+import ServiceLifecycle
 import Testing
 import WireMVC
 import WireMVCServerTransport
@@ -101,9 +102,11 @@ struct HelloController: RouteContributor {
     }
 }
 
-/// Stands in for `Wire.bootstrap()`'s collated graph.
-struct TestGraph: RouteComposable {
+/// Stands in for `Wire.bootstrap()`'s collated graph. No `@BackgroundService` contributors here, so
+/// `services` is empty — the routes are what this adapter test drives.
+struct TestGraph: WireMVCComposable {
     var routeContributors: [any RouteContributor] { [HelloController()] }
+    var services: [any Service] { [] }
 }
 
 @Suite("WireMVCServerTransport")

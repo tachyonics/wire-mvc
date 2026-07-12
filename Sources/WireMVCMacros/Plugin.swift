@@ -3,5 +3,5 @@ import SwiftSyntaxMacros
 
 @main
 struct WireMVCMacrosPlugin: CompilerPlugin {
-    let providingMacros: [any Macro.Type] = [ControllerMacro.self, RouteMarkerMacro.self]
+    let providingMacros: [any Macro.Type] = [ControllerMacro.self, RouteMarkerMacro.self, BackgroundServiceMacro.self]
 }
