@@ -55,6 +55,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-http-types.git", from: "1.6.0"),
         .package(url: "https://github.com/apple/swift-collections.git", from: "1.6.0"),
         .package(url: "https://github.com/swift-server/swift-http-server.git", branch: "main"),
+        .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.13.2"),
         .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.7.0"),
         .package(url: "https://github.com/swiftlang/swift-syntax", branch: "release/6.4.x"),
@@ -77,6 +78,9 @@ let package = Package(
                 .product(name: "AsyncStreaming", package: "swift-async-algorithms"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "BasicContainers", package: "swift-collections"),
+                // The `services` collation key + `WireMVCComposable.services` surface app-scoped
+                // `ServiceLifecycle` services the graph runs alongside the server.
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ],
             swiftSettings: proposalSettings
         ),
@@ -91,6 +95,8 @@ let package = Package(
                 .product(name: "BasicContainers", package: "swift-collections"),
                 .product(name: "NIOHTTPServer", package: "swift-http-server"),
                 .product(name: "Logging", package: "swift-log"),
+                // The generated `_WireGraph: WireMVCComposable` conformance references `any Service`.
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ],
             swiftSettings: proposalSettings,
             plugins: [.plugin(name: "WireBuildPlugin", package: "swift-wire")]
@@ -107,6 +113,8 @@ let package = Package(
                 .product(name: "AsyncStreaming", package: "swift-async-algorithms"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "BasicContainers", package: "swift-collections"),
+                // `apply` returns the graph's collated `[any Service]`.
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
                 .product(
                     name: "OpenAPIRuntime",
                     package: "swift-openapi-runtime",
@@ -117,7 +125,10 @@ let package = Package(
         ),
         .testTarget(
             name: "WireMVCServerTransportTests",
-            dependencies: ["WireMVCServerTransport"],
+            dependencies: [
+                "WireMVCServerTransport",
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+            ],
             swiftSettings: proposalSettings
         ),
     ]

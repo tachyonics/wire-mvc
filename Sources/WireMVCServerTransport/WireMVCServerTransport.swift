@@ -1,5 +1,6 @@
 #if ServerTransport
 public import OpenAPIRuntime
+public import ServiceLifecycle
 public import Wire
 public import WireMVC
 
@@ -162,11 +163,18 @@ private struct ServerTransportRouteBuilder: RoutableHTTPServerBuilder {
 /// counterpart to `WireMVC.apply(_:to:)` (which targets a `RoutableHTTPServerBuilder` directly): a
 /// Hummingbird/Vapor runtime uses this to serve the *same* controllers a proposal server does.
 public enum WireMVCServerTransport {
-    /// Register the graph's collated controllers onto a `ServerTransport`.
-    public static func apply(_ graph: some RouteComposable, to transport: some ServerTransport) throws {
+    /// Register the graph's collated controllers onto a `ServerTransport` and return the graph's
+    /// collated app-scoped `ServiceLifecycle` services to hand to `Application(services:)` / a
+    /// `ServiceGroup`.
+    @discardableResult
+    public static func apply(
+        _ graph: some WireMVCComposable,
+        to transport: some ServerTransport
+    ) throws -> [any Service] {
         var builder = ServerTransportRouteBuilder()
-        try WireMVC.apply(graph, to: &builder)
+        let services = try WireMVC.apply(graph, to: &builder)
         try builder.apply(to: transport)
+        return services
     }
 
     /// Register a `GET` endpoint serving the graph's wiring model (`introspect()`) as JSON onto a
