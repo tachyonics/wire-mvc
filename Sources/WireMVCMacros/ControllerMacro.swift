@@ -29,7 +29,7 @@ public struct ControllerMacro: ExtensionMacro {
         let body = routeBlocks.joined(separator: "\n")
         let ext: DeclSyntax = """
             extension \(type.trimmed): RouteContributor {
-                \(raw: access)func registerWireHandlers<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                \(raw: access)func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                 where
                     Builder.RequestContext: ~Copyable,
                     Builder.Reader: ~Copyable,

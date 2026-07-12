@@ -1,48 +1,48 @@
-public import HTTPAPIs
 public import Wire
 
 /// The surface a facade consumes — the collated controllers as route contributors. Wire emits this
-/// conformance on the generated graph, mapping `handlers` to the handlers `CollectedKey` (see
+/// conformance on the generated graph, mapping `routeContributors` to the `CollectedKey` (see
 /// `wireRouteConformance`).
 public protocol RouteComposable {
-    var handlers: [any RouteContributor] { get }
+    var routeContributors: [any RouteContributor] { get }
 }
 
-/// Tells Wire to emit `extension _WireGraph: RouteComposable`, mapping `handlers` to the
-/// `RouteKeys.handlers` `CollectedKey` product.
+/// Tells Wire to emit `extension _WireGraph: RouteComposable`, mapping `routeContributors` to the
+/// `WireMVCKeys.routeContributors` `CollectedKey` product.
 public let wireRouteConformance = WireGraphConformanceV1(
     conformsTo: (any RouteComposable).self,
-    members: [.init("handlers", from: RouteKeys.handlers)]
+    members: [.init("routeContributors", from: WireMVCKeys.routeContributors)]
 )
 
 public enum WireMVC {
-    /// Build the request handler for `server` from the graph's collated controllers. Pass the
-    /// result to `server.serve(handler:)`:
+    /// Register the graph's collated controllers onto a route builder — any
+    /// `RoutableHTTPServerBuilder` (a router, an adapter's builder). WireMVC stays router-agnostic,
+    /// exactly as the old `apply` stayed transport-agnostic over `some ServerTransport`; the concrete
+    /// builder — which is also the proposal's `HTTPServerRequestHandler`, so it can serve — is the
+    /// caller's:
     ///
     /// ```swift
     /// let graph = try await Wire.bootstrap()
-    /// let router = try WireMVC.router(for: graph, server: server)
+    /// var router = WireRouter(for: server)   // a concrete RoutableHTTPServerBuilder + handler
+    /// try WireMVC.apply(graph, to: &router)
     /// try await server.serve(handler: router)
     /// ```
     ///
-    /// The router is generic over the server's associated `Reader`/`ResponseSender`; the inverse
-    /// (`~Copyable`) requirements are restated here because they don't propagate across the generic
-    /// boundary on their own.
-    public static func router<Graph: RouteComposable, Server: HTTPServer>(
-        for graph: Graph,
-        server: borrowing Server
-    ) throws -> WireRouter<Server.RequestContext, Server.Reader, Server.ResponseSender>
+    /// The inverse (`~Copyable`) requirements are restated here because they don't propagate across
+    /// the generic boundary on their own.
+    public static func apply<Builder: RoutableHTTPServerBuilder>(
+        _ graph: some RouteComposable,
+        to builder: inout Builder
+    ) throws
     where
-        Server.RequestContext: ~Copyable,
-        Server.Reader: ~Copyable,
-        Server.ResponseSender: ~Copyable,
-        Server.ResponseSender.Writer: ~Copyable
+        Builder.RequestContext: ~Copyable,
+        Builder.Reader: ~Copyable,
+        Builder.ResponseSender: ~Copyable,
+        Builder.ResponseSender.Writer: ~Copyable
     {
-        var router = WireRouter<Server.RequestContext, Server.Reader, Server.ResponseSender>()
-        for contributor in graph.handlers {
-            try contributor.registerWireHandlers(on: &router)
+        for contributor in graph.routeContributors {
+            try contributor.registerWireRoutes(on: &builder)
         }
-        return router
     }
 
     /// Register a `GET` endpoint serving the graph's wiring model (`introspect()`) as JSON onto a

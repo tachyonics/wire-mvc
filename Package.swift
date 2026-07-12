@@ -9,9 +9,11 @@ import PackageDescription
 // proposal server (e.g. swift-server's `NIOHTTPServer`) unchanged.
 //
 // `@Controller` aliases `@Contributes(to: RouteKeys.handlers)`, so swift-wire's graph collates the
-// controllers; `Wire.bootstrap()` returns a graph conforming to `RouteComposable`, which
-// `WireMVC.router(for:server:)` turns into the server's request handler. Depends on pushed
-// swift-wire main; `WireMVCExample` is the runnable end-to-end validation, served on `NIOHTTPServer`.
+// controllers; `Wire.bootstrap()` returns a graph conforming to `RouteComposable`, and `WireMVC.apply`
+// registers the controllers onto a caller-owned `some RoutableHTTPServerBuilder` (a router, which is
+// also the proposal's request handler, so it serves) — WireMVC stays router-agnostic. Depends on
+// pushed swift-wire main; `WireMVCExample` is the runnable end-to-end validation, served on
+// `NIOHTTPServer` via a concrete `WireRouter` that lives in the example.
 //
 // tools-version 6.4 and the experimental/upcoming-feature flags match the proposal stack — its API
 // is compiled with them, so a consumer needs the same to call it. Requires a Swift 6.4 toolchain.

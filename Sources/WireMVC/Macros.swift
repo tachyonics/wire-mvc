@@ -6,23 +6,24 @@ public import Wire
 // annotations are markers `@Controller` reads (verbs/responses are no-op peer macros; the param
 // bindings are `@propertyWrapper`s in RequestBinding.swift).
 
-/// Tells Wire that `@Controller` aliases `@Contributes(to: RouteKeys.handlers)`, so a controller
-/// needs only `@Singleton @Controller` — the plugin collates it without a separate `@Contributes`.
+/// Tells Wire that `@Controller` aliases `@Contributes(to: WireMVCKeys.routeContributors)`, so a
+/// controller needs only `@Singleton @Controller` — the plugin collates it without a separate
+/// `@Contributes`.
 public let wireMVCControllerAlias = WireAdapterAnnotationV1(
     annotation: "Controller",
-    contributesTo: RouteKeys.handlers
+    contributesTo: WireMVCKeys.routeContributors
 )
 
 /// Generates a `RouteContributor` conformance registering each `@Get`/`@Post`/… route onto a
 /// `some RoutableHTTPServerBuilder`, under the optional path prefix. `@Singleton @Controller("/users")`
 /// is all an app-scoped controller needs.
-@attached(extension, conformances: RouteContributor, names: named(registerWireHandlers(on:)))
+@attached(extension, conformances: RouteContributor, names: named(registerWireRoutes(on:)))
 public macro Controller(_ path: String) =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 
 /// Generates the `RouteContributor` conformance with no path prefix (routes carry the full path on
 /// their verb annotation).
-@attached(extension, conformances: RouteContributor, names: named(registerWireHandlers(on:)))
+@attached(extension, conformances: RouteContributor, names: named(registerWireRoutes(on:)))
 public macro Controller() =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 

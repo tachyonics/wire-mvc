@@ -60,7 +60,8 @@ let server = NIOHTTPServer(
     )
 )
 
-var router = try WireMVC.router(for: graph, server: server)
+var router = WireRouter(for: server)
+try WireMVC.apply(graph, to: &router)
 try WireMVC.mountIntrospection(for: graph, into: &router)
 
 try await withThrowingTaskGroup(of: Void.self) { group in
