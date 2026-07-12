@@ -28,6 +28,11 @@ jobs:
         # turns them into NIOHTTPServer's request handler and the example drives every route over
         # real HTTP on an ephemeral loopback port. Prints "wire-mvc example OK" or exits non-zero.
         run: swift run WireMVCExample
+      - name: Test ServerTransport adapter (trait)
+        # The opt-in WireMVCServerTransport adapter is behind the `ServerTransport` trait (which pulls
+        # in OpenAPIRuntime); enable it to build the adapter + run its test. The steps above leave the
+        # trait off, so the core never resolves OpenAPIRuntime.
+        run: swift test --traits ServerTransport
 
   SwiftFormat:
     name: swift-format (6.4 toolchain)
