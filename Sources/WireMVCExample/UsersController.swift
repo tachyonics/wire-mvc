@@ -2,9 +2,9 @@ import Wire
 import WireMVC
 
 // A WireMVC controller in its natural declarative shape. `@Singleton` makes it a graph
-// binding; `@Controller` walks these routes and generates the `TransportContributor` witness
+// binding; `@Controller` walks these routes and generates the `RouteContributor` witness
 // (the extension is macro-generated), and its `@Contributes` alias collates the controller so
-// `Wire.bootstrap()` + `WireMVC.apply` register its routes.
+// `Wire.bootstrap()` + `WireMVC.router` register its routes onto the server.
 @Singleton
 @Controller("/users")
 struct UsersController: Sendable {

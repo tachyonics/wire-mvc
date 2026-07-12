@@ -1,47 +1,66 @@
-import HTTPTypes
-import OpenAPIRuntime
-import Wire
+public import HTTPAPIs
+public import Wire
 
-/// The surface a facade consumes — the collated controllers as transport contributors. Wire
-/// emits this conformance on the generated graph, mapping `handlers` to the handlers
-/// `CollectedKey` (see `wireTransportConformance`).
-public protocol TransportComposable {
-    var handlers: [any TransportContributor] { get }
+/// The surface a facade consumes — the collated controllers as route contributors. Wire emits this
+/// conformance on the generated graph, mapping `handlers` to the handlers `CollectedKey` (see
+/// `wireRouteConformance`).
+public protocol RouteComposable {
+    var handlers: [any RouteContributor] { get }
 }
 
-/// Tells Wire to emit `extension _WireGraph: TransportComposable`, mapping `handlers` to the
-/// `TransportKeys.handlers` `CollectedKey` product.
-public let wireTransportConformance = WireGraphConformanceV1(
-    conformsTo: (any TransportComposable).self,
-    members: [.init("handlers", from: TransportKeys.handlers)]
+/// Tells Wire to emit `extension _WireGraph: RouteComposable`, mapping `handlers` to the
+/// `RouteKeys.handlers` `CollectedKey` product.
+public let wireRouteConformance = WireGraphConformanceV1(
+    conformsTo: (any RouteComposable).self,
+    members: [.init("handlers", from: RouteKeys.handlers)]
 )
 
 public enum WireMVC {
-    /// Register the collated controllers' routes onto a user-owned transport (a Hummingbird
-    /// `Router`, a Vapor `Application`, a Lambda transport — any `ServerTransport`).
-    public static func apply(
-        _ graph: some TransportComposable,
-        to transport: some ServerTransport
-    ) throws {
+    /// Build the request handler for `server` from the graph's collated controllers. Pass the
+    /// result to `server.serve(handler:)`:
+    ///
+    /// ```swift
+    /// let graph = try await Wire.bootstrap()
+    /// let router = try WireMVC.router(for: graph, server: server)
+    /// try await server.serve(handler: router)
+    /// ```
+    ///
+    /// The router is generic over the server's associated `Reader`/`ResponseSender`; the inverse
+    /// (`~Copyable`) requirements are restated here because they don't propagate across the generic
+    /// boundary on their own.
+    public static func router<Graph: RouteComposable, Server: HTTPServer>(
+        for graph: Graph,
+        server: borrowing Server
+    ) throws -> WireRouter<Server.RequestContext, Server.Reader, Server.ResponseSender>
+    where
+        Server.RequestContext: ~Copyable,
+        Server.Reader: ~Copyable,
+        Server.ResponseSender: ~Copyable,
+        Server.ResponseSender.Writer: ~Copyable
+    {
+        var router = WireRouter<Server.RequestContext, Server.Reader, Server.ResponseSender>()
         for contributor in graph.handlers {
-            try contributor.registerWireHandlers(on: transport)
+            try contributor.registerWireHandlers(on: &router)
         }
+        return router
     }
 
     /// Register a `GET` endpoint serving the graph's wiring model (`introspect()`) as JSON onto a
-    /// user-owned transport. Because the target is any `ServerTransport`, this introspection
-    /// endpoint is cross-runtime — it mounts on Hummingbird, Vapor, or Lambda unchanged, unlike a
-    /// framework-specific one. Mount it where you want (e.g. behind the app's own auth).
-    public static func mountIntrospection(
+    /// router (or any `RoutableHTTPServerBuilder`). The model is encoded once, at mount time.
+    public static func mountIntrospection<Builder: RoutableHTTPServerBuilder>(
         for graph: some Introspectable,
-        on transport: some ServerTransport,
+        into builder: inout Builder,
         at path: String = "/wiring"
-    ) throws {
-        let model = graph.introspect()
-        try transport.register(
-            { _, _, _ in try WireMVCResponse.json(model, status: .ok) },
-            method: .get,
-            path: path
-        )
+    ) throws
+    where
+        Builder.RequestContext: ~Copyable,
+        Builder.Reader: ~Copyable,
+        Builder.ResponseSender: ~Copyable,
+        Builder.ResponseSender.Writer: ~Copyable
+    {
+        let outcome = try WireMVCResponse.json(graph.introspect(), status: .ok)
+        builder.register(method: .get, path: path) { _, _, _, responseSender in
+            try await outcome.send(on: responseSender)
+        }
     }
 }

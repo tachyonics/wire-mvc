@@ -1,12 +1,13 @@
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// `@Controller(_ path: String)` / `@Controller()` — walks the controller's functions, and
-/// for each one carrying a verb annotation (`@Get`/`@Post`/…) generates a `transport.register`
-/// call inside a `TransportContributor` witness: bind each parameter (`@Path`/`@Query`/
-/// `@JSONBody`/`@Header`), call the handler, encode the response (`@JSONResponse` /
-/// `@ResponseStatus`). This is the member-walking, member-recognition adapter — the generated
-/// body is exactly spike-11's hand-written shape.
+/// `@Controller(_ path: String)` / `@Controller()` — walks the controller's functions, and for each
+/// one carrying a verb annotation (`@Get`/`@Post`/…) generates a `builder.register` call inside a
+/// `RouteContributor` witness: bind each parameter (`@Path`/`@Query`/`@JSONBody`/`@Header`), call the
+/// handler, and send the response (`@JSONResponse` / `@ResponseStatus`). The witness is generic over
+/// `some RoutableHTTPServerBuilder` and restates the inverse (`~Copyable`) requirements, because they
+/// don't propagate across the generic boundary; the response is computed into a `WireMVCOutcome`
+/// first, so the `consuming` sender is consumed exactly once.
 public struct ControllerMacro: ExtensionMacro {
     public static func expansion(
         of node: AttributeSyntax,
@@ -27,8 +28,14 @@ public struct ControllerMacro: ExtensionMacro {
 
         let body = routeBlocks.joined(separator: "\n")
         let ext: DeclSyntax = """
-            extension \(type.trimmed): TransportContributor {
-                \(raw: access)func registerWireHandlers(on transport: any ServerTransport) throws {
+            extension \(type.trimmed): RouteContributor {
+                \(raw: access)func registerWireHandlers<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                where
+                    Builder.RequestContext: ~Copyable,
+                    Builder.Reader: ~Copyable,
+                    Builder.ResponseSender: ~Copyable,
+                    Builder.ResponseSender.Writer: ~Copyable
+                {
             \(raw: body)
                 }
             }
@@ -44,22 +51,26 @@ public struct ControllerMacro: ExtensionMacro {
         prefix: String
     ) throws -> String {
         let path = joinPath(prefix, verb.path ?? "")
-        let (binds, callArgs) = try parameterBindings(of: function)
+        let hasBody = routeHasBody(function)
+        let (binds, callArgs) = try parameterBindings(of: function, hasBody: hasBody)
+        let hasBinds = !binds.isEmpty
         let call = "try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))"
-        let response = try responseLine(from: function.attributes, call: call, route: function.name.text)
+        let response = try responseComputation(from: function.attributes, call: call, route: function.name.text)
+        let requestName = hasBinds ? "request" : "_"
+        let parametersName = hasBinds ? "pathParameters" : "_"
+        let readerName = hasBody ? "reader" : "_"
         return """
-            try transport.register(
-            \(closureLiteral(binds: binds, response: response)),
-                method: \(verb.method),
-                path: "\(path)"
-            )
+            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(parametersName), \(readerName), responseSender in
+            \(closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response))
+            }
             """
     }
 
-    /// The `let <name> = try await <Binding><<Type>>.bind(...)` lines and the handler call
-    /// argument list, one entry per handler parameter.
+    /// The `let <name> = try await <Binding><<Type>>.bind(...)` lines and the handler call argument
+    /// list, one entry per handler parameter.
     private static func parameterBindings(
-        of function: FunctionDeclSyntax
+        of function: FunctionDeclSyntax,
+        hasBody: Bool
     ) throws -> (binds: [String], callArgs: [String]) {
         var binds: [String] = []
         var callArgs: [String] = []
@@ -72,17 +83,26 @@ public struct ControllerMacro: ExtensionMacro {
                 )
             }
             let bindingName = binding.name ?? (isWildcard ? internalName : param.firstName.text)
-            binds.append("let \(internalName) = \(bindExpression(for: param, binding: binding, name: bindingName))")
+            binds.append(
+                "let \(internalName) = \(bindExpression(for: param, binding: binding, name: bindingName, hasBody: hasBody))"
+            )
             callArgs.append(isWildcard ? internalName : "\(param.firstName.text): \(internalName)")
         }
         return (binds, callArgs)
     }
 
     /// The binding call for one parameter: `bindOptional` (→ `T?`) for an optional type,
-    /// `bindOptional(...) ?? default` for a defaulted parameter, else the throwing `bind`.
-    private static func bindExpression(for param: FunctionParameterSyntax, binding: Binding, name: String) -> String {
+    /// `bindOptional(...) ?? default` for a defaulted parameter, else the throwing `bind`. `body` is
+    /// the collected request body (`requestBody`) for routes with a `@JSONBody`, else `nil`.
+    private static func bindExpression(
+        for param: FunctionParameterSyntax,
+        binding: Binding,
+        name: String,
+        hasBody: Bool
+    ) -> String {
         let type = param.type.trimmedDescription
-        let args = "name: \"\(name)\", request: request, body: requestBody, metadata: metadata"
+        let bodyArgument = hasBody ? "requestBody" : "nil"
+        let args = "name: \"\(name)\", request: request, pathParameters: pathParameters, body: \(bodyArgument)"
         if type.hasSuffix("?") {
             let underlying = String(type.dropLast())
             return "try await \(binding.wrapper)<\(underlying)>.bindOptional(\(args))"
@@ -93,40 +113,55 @@ public struct ControllerMacro: ExtensionMacro {
         return "try await \(binding.wrapper)<\(type)>.bind(\(args))"
     }
 
-    /// The response statement(s): a JSON body (`@JSONResponse`) or an empty status
-    /// (`@ResponseStatus`). One response annotation is required.
-    private static func responseLine(
+    /// The statement that assigns `wireMVCOutcome`: a JSON body (`@JSONResponse`) or a bare status
+    /// (`@ResponseStatus`, after calling the handler for its effect). One response annotation is
+    /// required.
+    private static func responseComputation(
         from attributes: AttributeListSyntax,
         call: String,
         route: String
     ) throws -> String {
         if let status = jsonResponseStatus(from: attributes) {
-            return "return try WireMVCResponse.json(\(call), status: \(status))"
+            return "wireMVCOutcome = try WireMVCResponse.json(\(call), status: \(status))"
         }
         if let status = responseStatus(from: attributes) {
-            return "\(call)\nreturn (HTTPResponse(status: \(status)), nil)"
+            return "\(call)\nwireMVCOutcome = .status(\(status))"
         }
         throw WireMVCMacroError(
             "route '\(route)' needs a response annotation (@JSONResponse or @ResponseStatus)"
         )
     }
 
-    /// The registration closure. With bindings, wraps them in a `do`/`catch` that maps a
-    /// `WireMVCBindingError` to its response (415/422/400); without, just the response.
-    private static func closureLiteral(binds: [String], response: String) -> String {
-        guard !binds.isEmpty else {
-            return "{ _, _, _ in\n\(response)\n}"
+    /// The registration closure body. Compute the outcome — collecting the body first when a
+    /// `@JSONBody` is present, mapping a `WireMVCBindingError` to its status — then send it once.
+    private static func closureBody(hasBinds: Bool, hasBody: Bool, binds: [String], response: String) -> String {
+        guard hasBinds else {
+            return """
+                let wireMVCOutcome: WireMVCOutcome
+                \(response)
+                try await wireMVCOutcome.send(on: responseSender)
+                """
         }
+        let collect = hasBody ? "let requestBody = try await WireMVCRequest.collectBody(reader)\n" : ""
         return """
-            { request, requestBody, metadata in
-                do {
-            \(binds.joined(separator: "\n"))
+            let wireMVCOutcome: WireMVCOutcome
+            do {
+            \(collect)\(binds.joined(separator: "\n"))
             \(response)
-                } catch let wireMVCBindingError as WireMVCBindingError {
-                    return wireMVCBindingError.response
-                }
+            } catch let wireMVCBindingError as WireMVCBindingError {
+                wireMVCOutcome = .status(wireMVCBindingError.status)
             }
+            try await wireMVCOutcome.send(on: responseSender)
             """
+    }
+
+    private static func routeHasBody(_ function: FunctionDeclSyntax) -> Bool {
+        for param in function.signature.parameterClause.parameters {
+            if let binding = binding(from: param.attributes), binding.wrapper == "JSONBody" {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Attribute reading
@@ -174,8 +209,8 @@ public struct ControllerMacro: ExtensionMacro {
         return nil
     }
 
-    /// The `@JSONResponse` status expression (verbatim), `.ok` if present without a status,
-    /// or `nil` if there's no `@JSONResponse`.
+    /// The `@JSONResponse` status expression (verbatim), `.ok` if present without a status, or `nil`
+    /// if there's no `@JSONResponse`.
     private static func jsonResponseStatus(from attributes: AttributeListSyntax) -> String? {
         for case let .attribute(attr) in attributes where attr.attributeName.trimmedDescription == "JSONResponse" {
             guard case let .argumentList(list) = attr.arguments else { return ".ok" }
