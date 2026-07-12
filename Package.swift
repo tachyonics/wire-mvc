@@ -111,6 +111,8 @@ let package = Package(
                 .product(name: "Wire", package: "swift-wire"),
                 .product(name: "HTTPAPIs", package: "swift-http-api-proposal"),
                 .product(name: "AsyncStreaming", package: "swift-async-algorithms"),
+                // `AsyncChannel` (rendezvous → backpressure) backs the streaming response bridge.
+                .product(name: "AsyncAlgorithms", package: "swift-async-algorithms"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "BasicContainers", package: "swift-collections"),
                 // `apply` returns the graph's collated `[any Service]`.

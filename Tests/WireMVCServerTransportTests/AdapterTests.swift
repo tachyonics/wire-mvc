@@ -57,6 +57,22 @@ final class MockTransport: ServerTransport, @unchecked Sendable {
         return (HTTPResponse(status: .notFound), [])
     }
 
+    /// Like `send`, but returns the response `HTTPBody` **uncollected** so a test can pull chunks
+    /// incrementally — collecting (as `send` does) would hang on an unbounded streamed body.
+    func sendStreaming(
+        _ method: HTTPRequest.Method,
+        _ path: String,
+        body: HTTPBody? = nil
+    ) async throws -> (HTTPResponse, HTTPBody?) {
+        let requestSegments = Self.segments(path)
+        for registration in registrations where registration.method == method {
+            guard let params = Self.match(template: registration.template, path: requestSegments) else { continue }
+            let request = HTTPRequest(method: method, scheme: nil, authority: nil, path: path)
+            return try await registration.handler(request, body, .init(pathParameters: params))
+        }
+        return (HTTPResponse(status: .notFound), nil)
+    }
+
     private static func segments(_ path: String) -> [String] {
         path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
     }
@@ -102,10 +118,58 @@ struct HelloController: RouteContributor {
     }
 }
 
+/// An unbounded event producer that counts what it has handed out, so a test can assert the handler
+/// never runs far ahead of the consumer (backpressure).
+actor CountingEventSource {
+    private(set) var producedCount = 0
+
+    func next() -> [UInt8] {
+        producedCount += 1
+        return Array("data: tick \(producedCount)\n\n".utf8)
+    }
+}
+
+/// A raw streaming (SSE) controller — what `@Controller` would emit for a `@RawRoute`. It drives the
+/// sender incrementally (`send` head → one `write` per event) rather than `sendAndFinish`, so it
+/// exercises the adapter's streaming path.
+struct StreamingController: RouteContributor {
+    let source: CountingEventSource
+
+    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+    where
+        Builder.RequestContext: ~Copyable,
+        Builder.Reader: ~Copyable,
+        Builder.ResponseSender: ~Copyable,
+        Builder.ResponseSender.Writer: ~Copyable
+    {
+        let source = self.source
+        builder.register(method: .get, path: "/events") { _, _, _, responseSender in
+            var fields = HTTPFields()
+            fields[.contentType] = "text/event-stream"
+            var writer = try await responseSender.send(HTTPResponse(status: .ok, headerFields: fields))
+            // Cancellation-aware, as a real SSE handler must be: when the transport releases the body
+            // (client disconnect), the bound handler task is cancelled and the loop exits.
+            while !Task.isCancelled {
+                var chunk = UniqueArray<UInt8>(copying: await source.next())
+                try await writer.write(buffer: &chunk)
+            }
+            var end = UniqueArray<UInt8>()
+            try await writer.finish(buffer: &end, finalElement: nil)
+        }
+    }
+}
+
 /// Stands in for `Wire.bootstrap()`'s collated graph. No `@BackgroundService` contributors here, so
 /// `services` is empty — the routes are what this adapter test drives.
 struct TestGraph: WireMVCComposable {
     var routeContributors: [any RouteContributor] { [HelloController()] }
+    var services: [any Service] { [] }
+}
+
+/// A graph whose single controller streams an unbounded SSE response.
+struct StreamingGraph: WireMVCComposable {
+    let source: CountingEventSource
+    var routeContributors: [any RouteContributor] { [StreamingController(source: source)] }
     var services: [any Service] { [] }
 }
 
@@ -130,6 +194,31 @@ struct AdapterTests {
 
         let (miss, _) = try await transport.send(.get, "/nope")
         #expect(miss.status == .notFound)
+    }
+
+    /// A raw streaming (SSE) handler streams through the adapter incrementally: events arrive from an
+    /// unbounded response (a buffering bridge would hang), and the handler never runs more than one
+    /// event ahead of the consumer (the rendezvous `AsyncChannel`'s backpressure).
+    @Test
+    func streamsRawResponseWithBackpressure() async throws {
+        let source = CountingEventSource()
+        let transport = MockTransport()
+        try WireMVCServerTransport.apply(StreamingGraph(source: source), to: transport)
+
+        let (head, streamingBody) = try await transport.sendStreaming(.get, "/events")
+        #expect(head.status == .ok && head.headerFields[.contentType] == "text/event-stream")
+        let body = try #require(streamingBody)
+
+        var events: [String] = []
+        var maxLead = 0
+        for try await chunk in body {
+            events.append(String(decoding: chunk, as: UTF8.self))
+            maxLead = max(maxLead, await source.producedCount - events.count)
+            if events.count >= 5 { break }
+        }
+
+        #expect(events.first == "data: tick 1\n\n" && events.last == "data: tick 5\n\n" && events.count == 5)
+        #expect(maxLead <= 1)
     }
 }
 #endif
