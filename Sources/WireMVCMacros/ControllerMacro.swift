@@ -1,3 +1,4 @@
+import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
 
@@ -23,7 +24,11 @@ public struct ControllerMacro: ExtensionMacro {
         for member in declaration.memberBlock.members {
             guard let function = member.decl.as(FunctionDeclSyntax.self) else { continue }
             guard let verb = verb(from: function.attributes) else { continue }  // no verb → helper, skip
-            routeBlocks.append(try routeBlock(function: function, verb: verb, prefix: prefix))
+            // A route that fails validation is diagnosed at its offending node and skipped, so the
+            // rest of the controller still generates (no cascade of downstream errors).
+            if let block = routeBlock(function: function, verb: verb, prefix: prefix, in: context) {
+                routeBlocks.append(block)
+            }
         }
 
         let body = routeBlocks.joined(separator: "\n")
@@ -48,14 +53,16 @@ public struct ControllerMacro: ExtensionMacro {
     private static func routeBlock(
         function: FunctionDeclSyntax,
         verb: Verb,
-        prefix: String
-    ) throws -> String {
+        prefix: String,
+        in context: some MacroExpansionContext
+    ) -> String? {
         let path = joinPath(prefix, verb.path ?? "")
         let hasBody = routeHasBody(function)
-        let (binds, callArgs) = try parameterBindings(of: function, hasBody: hasBody)
+        guard let (binds, callArgs) = parameterBindings(of: function, path: path, hasBody: hasBody, in: context)
+        else { return nil }
         let hasBinds = !binds.isEmpty
         let call = "try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))"
-        let response = try responseComputation(from: function.attributes, call: call, route: function.name.text)
+        guard let response = responseComputation(from: function, call: call, in: context) else { return nil }
         let requestName = hasBinds ? "request" : "_"
         let parametersName = hasBinds ? "pathParameters" : "_"
         let readerName = hasBody ? "reader" : "_"
@@ -70,19 +77,31 @@ public struct ControllerMacro: ExtensionMacro {
     /// list, one entry per handler parameter.
     private static func parameterBindings(
         of function: FunctionDeclSyntax,
-        hasBody: Bool
-    ) throws -> (binds: [String], callArgs: [String]) {
+        path: String,
+        hasBody: Bool,
+        in context: some MacroExpansionContext
+    ) -> (binds: [String], callArgs: [String])? {
         var binds: [String] = []
         var callArgs: [String] = []
         for param in function.signature.parameterClause.parameters {
             let internalName = (param.secondName ?? param.firstName).text
             let isWildcard = param.firstName.tokenKind == .wildcard
             guard let binding = self.binding(from: param.attributes) else {
-                throw WireMVCMacroError(
-                    "handler parameter '\(internalName)' needs a binding annotation (@Path, @Query, @JSONBody, or @Header)"
-                )
+                context.diagnose(Diagnostic(node: param, message: WireMVCDiagnostic.unannotatedParameter(internalName)))
+                return nil
             }
             let bindingName = binding.name ?? (isWildcard ? internalName : param.firstName.text)
+            // `@Path name` must have a matching `{name}` in the route template — otherwise it can only
+            // ever fail at runtime (`missingPathParameter`), so reject it at the seam.
+            if binding.wrapper == "Path", !path.contains("{\(bindingName)}") {
+                context.diagnose(
+                    Diagnostic(
+                        node: param,
+                        message: WireMVCDiagnostic.pathPlaceholderMissing(name: bindingName, path: path)
+                    )
+                )
+                return nil
+            }
             binds.append(
                 "let \(internalName) = \(bindExpression(for: param, binding: binding, name: bindingName, hasBody: hasBody))"
             )
@@ -117,19 +136,39 @@ public struct ControllerMacro: ExtensionMacro {
     /// (`@ResponseStatus`, after calling the handler for its effect). One response annotation is
     /// required.
     private static func responseComputation(
-        from attributes: AttributeListSyntax,
+        from function: FunctionDeclSyntax,
         call: String,
-        route: String
-    ) throws -> String {
+        in context: some MacroExpansionContext
+    ) -> String? {
+        let attributes = function.attributes
+        let route = function.name.text
+        let returnsValue = functionReturnsValue(function)
         if let status = jsonResponseStatus(from: attributes) {
+            guard returnsValue else {
+                context.diagnose(Diagnostic(node: function.name, message: WireMVCDiagnostic.jsonResponseOnVoid(route)))
+                return nil
+            }
             return "wireMVCOutcome = try WireMVCResponse.json(\(call), status: \(status))"
         }
         if let status = responseStatus(from: attributes) {
+            guard !returnsValue else {
+                context.diagnose(
+                    Diagnostic(node: function.name, message: WireMVCDiagnostic.responseStatusOnValue(route))
+                )
+                return nil
+            }
             return "\(call)\nwireMVCOutcome = .status(\(status))"
         }
-        throw WireMVCMacroError(
-            "route '\(route)' needs a response annotation (@JSONResponse or @ResponseStatus)"
-        )
+        context.diagnose(Diagnostic(node: function.name, message: WireMVCDiagnostic.missingResponseAnnotation(route)))
+        return nil
+    }
+
+    /// Whether the handler returns a non-`Void` value — drives the `@JSONResponse`/`@ResponseStatus`
+    /// vs. signature check. No return clause, or `Void`/`()`, is treated as Void.
+    private static func functionReturnsValue(_ function: FunctionDeclSyntax) -> Bool {
+        guard let returnType = function.signature.returnClause?.type else { return false }
+        let text = returnType.trimmedDescription
+        return text != "Void" && text != "()"
     }
 
     /// The registration closure body. Compute the outcome — collecting the body first when a
@@ -256,7 +295,41 @@ public struct ControllerMacro: ExtensionMacro {
     }
 }
 
-struct WireMVCMacroError: Error, CustomStringConvertible {
-    let description: String
-    init(_ description: String) { self.description = description }
+/// The `@Controller` codegen diagnostics — node-anchored `error`s (M1 standard), each emitted at the
+/// offending parameter or function so the fix-it location is precise.
+enum WireMVCDiagnostic: DiagnosticMessage {
+    case unannotatedParameter(String)
+    case pathPlaceholderMissing(name: String, path: String)
+    case missingResponseAnnotation(String)
+    case jsonResponseOnVoid(String)
+    case responseStatusOnValue(String)
+
+    var message: String {
+        switch self {
+        case .unannotatedParameter(let name):
+            "handler parameter '\(name)' needs a binding annotation — one of @Path, @Query, @JSONBody, @Header"
+        case .pathPlaceholderMissing(let name, let path):
+            "@Path '\(name)' has no matching '{\(name)}' placeholder in the route path \"\(path)\""
+        case .missingResponseAnnotation(let route):
+            "route '\(route)' needs exactly one response annotation — @JSONResponse (returns a body) or @ResponseStatus (Void)"
+        case .jsonResponseOnVoid(let route):
+            "@JSONResponse on '\(route)' requires a returned value; use @ResponseStatus for a Void handler"
+        case .responseStatusOnValue(let route):
+            "@ResponseStatus on '\(route)' requires a Void handler; use @JSONResponse to encode the returned value"
+        }
+    }
+
+    var severity: DiagnosticSeverity { .error }
+
+    var diagnosticID: MessageID {
+        let id: String
+        switch self {
+        case .unannotatedParameter: id = "unannotatedParameter"
+        case .pathPlaceholderMissing: id = "pathPlaceholderMissing"
+        case .missingResponseAnnotation: id = "missingResponseAnnotation"
+        case .jsonResponseOnVoid: id = "jsonResponseOnVoid"
+        case .responseStatusOnValue: id = "responseStatusOnValue"
+        }
+        return MessageID(domain: "WireMVC", id: id)
+    }
 }
