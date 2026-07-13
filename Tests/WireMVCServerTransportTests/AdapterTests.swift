@@ -101,16 +101,16 @@ struct HelloController: RouteContributor {
         Builder.ResponseSender: ~Copyable,
         Builder.ResponseSender.Writer: ~Copyable
     {
-        builder.register(method: .get, path: "/hello") { _, _, _, responseSender in
+        builder.register(method: .get, path: "/hello") { _, _, _, _, responseSender in
             var body = UniqueArray<UInt8>(copying: "Well, hello!".utf8)
             try await responseSender.sendAndFinish(HTTPResponse(status: .ok), buffer: &body)
         }
-        builder.register(method: .post, path: "/echo") { _, _, reader, responseSender in
+        builder.register(method: .post, path: "/echo") { _, _, _, reader, responseSender in
             var collected = UniqueArray<UInt8>()
             _ = try await reader.collect(into: &collected, maximumSize: 1_000_000)
             try await responseSender.sendAndFinish(HTTPResponse(status: .ok), buffer: &collected)
         }
-        builder.register(method: .get, path: "/users/{id}") { _, pathParameters, _, responseSender in
+        builder.register(method: .get, path: "/users/{id}") { _, _, pathParameters, _, responseSender in
             let id = pathParameters["id"].map(String.init) ?? "?"
             var body = UniqueArray<UInt8>(copying: "user \(id)".utf8)
             try await responseSender.sendAndFinish(HTTPResponse(status: .ok), buffer: &body)
@@ -143,7 +143,7 @@ struct StreamingController: RouteContributor {
         Builder.ResponseSender.Writer: ~Copyable
     {
         let source = self.source
-        builder.register(method: .get, path: "/events") { _, _, _, responseSender in
+        builder.register(method: .get, path: "/events") { _, _, _, _, responseSender in
             var fields = HTTPFields()
             fields[.contentType] = "text/event-stream"
             var writer = try await responseSender.send(HTTPResponse(status: .ok, headerFields: fields))

@@ -70,7 +70,7 @@ public struct ControllerMacro: ExtensionMacro {
         let parametersName = hasBinds ? "pathParameters" : "_"
         let readerName = hasBody ? "reader" : "_"
         return """
-            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(parametersName), \(readerName), responseSender in
+            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), _, \(parametersName), \(readerName), responseSender in
             \(closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response))
             }
             """
@@ -86,7 +86,7 @@ public struct ControllerMacro: ExtensionMacro {
         return false
     }
 
-    private enum RawRole { case reader, sender }
+    private enum RawRole { case context, reader, sender }
 
     /// The `@RawRoute` register call: pass the register closure's primitives straight to the handler,
     /// matched by type (`HTTPRequest`, `[String: Substring]`) and by the reader/sender generic
@@ -99,6 +99,7 @@ public struct ControllerMacro: ExtensionMacro {
     ) -> String? {
         let roles = rawGenericRoles(function)
         var usesRequest = false
+        var usesContext = false
         var usesParameters = false
         var usesReader = false
         var usesSender = false
@@ -113,6 +114,9 @@ public struct ControllerMacro: ExtensionMacro {
             } else if canonical == "[String:Substring]" {
                 registerArgument = "pathParameters"
                 usesParameters = true
+            } else if roles[type] == .context {
+                registerArgument = "requestContext"
+                usesContext = true
             } else if roles[type] == .reader {
                 registerArgument = "reader"
                 usesReader = true
@@ -136,10 +140,11 @@ public struct ControllerMacro: ExtensionMacro {
             return nil
         }
         let requestName = usesRequest ? "request" : "_"
+        let contextName = usesContext ? "requestContext" : "_"
         let parametersName = usesParameters ? "pathParameters" : "_"
         let readerName = usesReader ? "reader" : "_"
         return """
-            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(parametersName), \(readerName), responseSender in
+            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(contextName), \(parametersName), \(readerName), responseSender in
                 try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))
             }
             """
@@ -167,6 +172,8 @@ public struct ControllerMacro: ExtensionMacro {
                 roles[parameter.name.text] = .reader
             } else if constraint.contains("HTTPResponseSender") {
                 roles[parameter.name.text] = .sender
+            } else if constraint.contains("RequestContext") {
+                roles[parameter.name.text] = .context
             }
         }
         return roles

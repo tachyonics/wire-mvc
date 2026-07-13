@@ -44,7 +44,7 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender: ~Copyable,
                         Builder.ResponseSender.Writer: ~Copyable
                     {
-                        builder.register(method: .get, path: "/todos/{id}") { request, pathParameters, _, responseSender in
+                        builder.register(method: .get, path: "/todos/{id}") { request, _, pathParameters, _, responseSender in
                             let wireMVCOutcome: WireMVCOutcome
                             do {
                                 let id = try await Path<String>.bind(name: "id", request: request, pathParameters: pathParameters, body: nil)
@@ -302,7 +302,7 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender: ~Copyable,
                         Builder.ResponseSender.Writer: ~Copyable
                     {
-                        builder.register(method: .get, path: "/users/events") { _, _, _, responseSender in
+                        builder.register(method: .get, path: "/users/events") { _, _, _, _, responseSender in
                             try await self.events(responseSender: responseSender)
                         }
                     }
