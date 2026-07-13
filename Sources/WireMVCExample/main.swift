@@ -57,7 +57,7 @@ let server = NIOHTTPServer(
 )
 
 var router = WireRouter(for: server)
-try WireMVC.apply(graph, to: &router)
+let services = try WireMVC.apply(graph, to: &router)
 try WireMVC.mountIntrospection(for: graph, into: &router)
 
 try await withThrowingTaskGroup(of: Void.self) { group in
@@ -164,6 +164,13 @@ try await withThrowingTaskGroup(of: Void.self) { group in
             "GET /wiring  → 200, WiringModel lists the collated UsersController"
         )
     }
+
+    // @BackgroundService collation — `WireMVC.apply` returns the graph's collated services, which
+    // include the `Heartbeat` contributed by `@BackgroundService` on a `@Provides` function.
+    check(
+        services.contains { $0 is Heartbeat },
+        "@BackgroundService  → apply returns graph.services collating the Heartbeat service"
+    )
 
     group.cancelAll()
     if !failed.isEmpty { throw ExampleFailed(failures: failed) }

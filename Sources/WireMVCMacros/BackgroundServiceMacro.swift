@@ -1,19 +1,16 @@
 import SwiftSyntax
 import SwiftSyntaxMacros
 
-/// `@BackgroundService` adds the `ServiceLifecycle.Service` conformance for a binding (if it isn't
-/// already stated) — the type still writes its own `run()`. Wire reads the attribute as an alias for
-/// `@Contributes(to: WireMVCKeys.services)`; the conformance is the framework surface, generated at
-/// expansion. Parallels `ControllerMacro`.
-public struct BackgroundServiceMacro: ExtensionMacro {
+/// Backs `@BackgroundService`. It's a marker Wire reads as an alias for
+/// `@Contributes(to: WireMVCKeys.services)` (see `wireMVCServiceAlias`); it expands to nothing itself,
+/// so it's legal on any binding — a `@Singleton`/`@Scoped` *type* or a `@Provides` *function*. The
+/// annotated (or returned) type is expected to already conform to `ServiceLifecycle.Service`.
+public struct BackgroundServiceMacro: PeerMacro {
     public static func expansion(
         of node: AttributeSyntax,
-        attachedTo declaration: some DeclGroupSyntax,
-        providingExtensionsOf type: some TypeSyntaxProtocol,
-        conformingTo protocols: [TypeSyntax],
+        providingPeersOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
-    ) throws -> [ExtensionDeclSyntax] {
-        let conformance: DeclSyntax = "extension \(type.trimmed): Service {}"
-        return [conformance.cast(ExtensionDeclSyntax.self)]
+    ) throws -> [DeclSyntax] {
+        []
     }
 }
