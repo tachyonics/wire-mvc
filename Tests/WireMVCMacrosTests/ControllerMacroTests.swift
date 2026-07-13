@@ -312,6 +312,56 @@ final class ControllerMacroTests: XCTestCase {
         )
     }
 
+    /// A `@RawRoute` handler can also claim the server's per-request `RequestContext`: a generic
+    /// parameter constrained to `HTTPServerCapability.RequestContext` matches the context slot, so the
+    /// generated closure binds `requestContext` and forwards it (alongside the sender).
+    func testRawRouteBindsContext() {
+        assertMacroExpansion(
+            """
+            @Controller("/users")
+            struct C {
+                @Get("/whoami")
+                @RawRoute
+                func whoami<
+                    Context: HTTPServerCapability.RequestContext & ~Copyable,
+                    Sender: HTTPResponseSender & ~Copyable & SendableMetatype
+                >(
+                    context: consuming Context,
+                    responseSender: consuming sending Sender
+                ) async throws where Sender.Writer: ~Copyable {
+                }
+            }
+            """,
+            expandedSource: """
+                struct C {
+                    func whoami<
+                        Context: HTTPServerCapability.RequestContext & ~Copyable,
+                        Sender: HTTPResponseSender & ~Copyable & SendableMetatype
+                    >(
+                        context: consuming Context,
+                        responseSender: consuming sending Sender
+                    ) async throws where Sender.Writer: ~Copyable {
+                    }
+                }
+
+                extension C: RouteContributor {
+                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    where
+                        Builder.RequestContext: ~Copyable,
+                        Builder.Reader: ~Copyable,
+                        Builder.ResponseSender: ~Copyable,
+                        Builder.ResponseSender.Writer: ~Copyable
+                    {
+                        builder.register(method: .get, path: "/users/whoami") { _, requestContext, _, _, responseSender in
+                            try await self.whoami(context: requestContext, responseSender: responseSender)
+                        }
+                    }
+                }
+                """,
+            macros: macros
+        )
+    }
+
     func testRawRouteMissingSenderDiagnoses() {
         assertMacroExpansion(
             """
