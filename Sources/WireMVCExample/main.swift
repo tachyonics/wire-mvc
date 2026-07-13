@@ -155,6 +155,15 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         )
     }
 
+    // @Get("/events/stream") @RawRoute — the raw handler writes the response sender itself (no decode/encode).
+    do {
+        let (status, body) = try await send("GET", "/users/events/stream", port: port)
+        check(
+            status == 200 && String(decoding: body, as: UTF8.self) == "data: hello\n\n",
+            "GET /users/events/stream  → 200, @RawRoute handler wrote the response sender directly"
+        )
+    }
+
     // WireMVC.mountIntrospection — the graph's wiring model, served over the same router.
     do {
         let (status, body) = try await send("GET", "/wiring", port: port)

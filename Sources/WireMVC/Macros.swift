@@ -63,3 +63,12 @@ public macro JSONResponse(status: HTTPResponse.Status) =
 @attached(peer)
 public macro ResponseStatus(_ status: HTTPResponse.Status) =
     #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
+/// The raw escape hatch: the handler receives the request, matched path parameters, the body reader,
+/// and the response sender verbatim (no param decode, no response encode) and writes the response
+/// itself. Use for streaming/SSE/proxying. The handler is generic over the reader/sender (the builder's
+/// associated types); take only the primitives you need — `HTTPRequest`, `[String: Substring]`, the
+/// `AsyncReader`-constrained reader, the `HTTPResponseSender`-constrained sender — in any order.
+/// Stands in for the response annotation (a `@RawRoute` needs no `@JSONResponse`/`@ResponseStatus`).
+@attached(peer)
+public macro RawRoute() = #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")

@@ -12,6 +12,7 @@ private let macros: [String: any Macro.Type] = [
     "Delete": RouteMarkerMacro.self,
     "JSONResponse": RouteMarkerMacro.self,
     "ResponseStatus": RouteMarkerMacro.self,
+    "RawRoute": RouteMarkerMacro.self,
 ]
 
 final class ControllerMacroTests: XCTestCase {
@@ -262,6 +263,88 @@ final class ControllerMacroTests: XCTestCase {
                 DiagnosticSpec(
                     message:
                         "@ResponseStatus on 'f' requires a Void handler; use @JSONResponse to encode the returned value",
+                    line: 5,
+                    column: 10
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    /// `@RawRoute` passes the register-closure primitives straight to a generic handler — here the
+    /// sender only, matched by its `HTTPResponseSender` constraint; the reader/request are `_`.
+    func testRawRouteGeneratesPassthrough() {
+        assertMacroExpansion(
+            """
+            @Controller("/users")
+            struct C {
+                @Get("/events")
+                @RawRoute
+                func events<Sender: HTTPResponseSender & ~Copyable & SendableMetatype>(
+                    responseSender: consuming sending Sender
+                ) async throws where Sender.Writer: ~Copyable {
+                }
+            }
+            """,
+            expandedSource: """
+                struct C {
+                    func events<Sender: HTTPResponseSender & ~Copyable & SendableMetatype>(
+                        responseSender: consuming sending Sender
+                    ) async throws where Sender.Writer: ~Copyable {
+                    }
+                }
+
+                extension C: RouteContributor {
+                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    where
+                        Builder.RequestContext: ~Copyable,
+                        Builder.Reader: ~Copyable,
+                        Builder.ResponseSender: ~Copyable,
+                        Builder.ResponseSender.Writer: ~Copyable
+                    {
+                        builder.register(method: .get, path: "/users/events") { _, _, _, responseSender in
+                            try await self.events(responseSender: responseSender)
+                        }
+                    }
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    func testRawRouteMissingSenderDiagnoses() {
+        assertMacroExpansion(
+            """
+            @Controller
+            struct C {
+                @Get("/x")
+                @RawRoute
+                func f(_ request: HTTPRequest) async throws {
+                }
+            }
+            """,
+            expandedSource: """
+                struct C {
+                    func f(_ request: HTTPRequest) async throws {
+                    }
+                }
+
+                extension C: RouteContributor {
+                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    where
+                        Builder.RequestContext: ~Copyable,
+                        Builder.Reader: ~Copyable,
+                        Builder.ResponseSender: ~Copyable,
+                        Builder.ResponseSender.Writer: ~Copyable
+                    {
+
+                    }
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message:
+                        "@RawRoute handler 'f' must take the response sender (a parameter generic over HTTPResponseSender) to write its response",
                     line: 5,
                     column: 10
                 )

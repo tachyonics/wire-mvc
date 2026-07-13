@@ -57,6 +57,9 @@ public struct ControllerMacro: ExtensionMacro {
         in context: some MacroExpansionContext
     ) -> String? {
         let path = joinPath(prefix, verb.path ?? "")
+        if hasRawRoute(function) {
+            return rawRouteBlock(function: function, verb: verb, path: path, in: context)
+        }
         let hasBody = routeHasBody(function)
         guard let (binds, callArgs) = parameterBindings(of: function, path: path, hasBody: hasBody, in: context)
         else { return nil }
@@ -71,6 +74,102 @@ public struct ControllerMacro: ExtensionMacro {
             \(closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response))
             }
             """
+    }
+
+    // MARK: - Raw route codegen
+
+    private static func hasRawRoute(_ function: FunctionDeclSyntax) -> Bool {
+        for case let .attribute(attr) in function.attributes
+        where attr.attributeName.trimmedDescription == "RawRoute" {
+            return true
+        }
+        return false
+    }
+
+    private enum RawRole { case reader, sender }
+
+    /// The `@RawRoute` register call: pass the register closure's primitives straight to the handler,
+    /// matched by type (`HTTPRequest`, `[String: Substring]`) and by the reader/sender generic
+    /// parameters' constraints (`AsyncReader`/`HTTPResponseSender`). No decode, no encode.
+    private static func rawRouteBlock(
+        function: FunctionDeclSyntax,
+        verb: Verb,
+        path: String,
+        in context: some MacroExpansionContext
+    ) -> String? {
+        let roles = rawGenericRoles(function)
+        var usesRequest = false
+        var usesParameters = false
+        var usesReader = false
+        var usesSender = false
+        var callArgs: [String] = []
+        for param in function.signature.parameterClause.parameters {
+            let type = strippingOwnership(param.type.trimmedDescription)
+            let canonical = type.filter { !$0.isWhitespace }
+            let registerArgument: String
+            if canonical == "HTTPRequest" {
+                registerArgument = "request"
+                usesRequest = true
+            } else if canonical == "[String:Substring]" {
+                registerArgument = "pathParameters"
+                usesParameters = true
+            } else if roles[type] == .reader {
+                registerArgument = "reader"
+                usesReader = true
+            } else if roles[type] == .sender {
+                registerArgument = "responseSender"
+                usesSender = true
+            } else {
+                let name = (param.secondName ?? param.firstName).text
+                context.diagnose(
+                    Diagnostic(node: param, message: WireMVCDiagnostic.unsupportedRawParameter(name: name, type: type))
+                )
+                return nil
+            }
+            let label = param.firstName.tokenKind == .wildcard ? "" : "\(param.firstName.text): "
+            callArgs.append("\(label)\(registerArgument)")
+        }
+        guard usesSender else {
+            context.diagnose(
+                Diagnostic(node: function.name, message: WireMVCDiagnostic.rawRouteMissingSender(function.name.text))
+            )
+            return nil
+        }
+        let requestName = usesRequest ? "request" : "_"
+        let parametersName = usesParameters ? "pathParameters" : "_"
+        let readerName = usesReader ? "reader" : "_"
+        return """
+            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(parametersName), \(readerName), responseSender in
+                try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))
+            }
+            """
+    }
+
+    /// Strip leading ownership/transfer specifiers (`consuming sending Sender` → `Sender`) so the base
+    /// type matches a generic-parameter name or a concrete raw-primitive type.
+    private static func strippingOwnership(_ type: String) -> String {
+        var base = type
+        for specifier in ["consuming ", "borrowing ", "inout ", "sending ", "__owned ", "__shared "] {
+            while base.hasPrefix(specifier) { base = String(base.dropFirst(specifier.count)) }
+        }
+        return base
+    }
+
+    /// Map each handler generic parameter to a raw role by its constraint — `AsyncReader` → reader,
+    /// `HTTPResponseSender` → sender — so a parameter of that generic type binds to the matching
+    /// register-closure primitive.
+    private static func rawGenericRoles(_ function: FunctionDeclSyntax) -> [String: RawRole] {
+        var roles: [String: RawRole] = [:]
+        guard let generics = function.genericParameterClause else { return roles }
+        for parameter in generics.parameters {
+            let constraint = parameter.inheritedType?.trimmedDescription ?? ""
+            if constraint.contains("AsyncReader") {
+                roles[parameter.name.text] = .reader
+            } else if constraint.contains("HTTPResponseSender") {
+                roles[parameter.name.text] = .sender
+            }
+        }
+        return roles
     }
 
     /// The `let <name> = try await <Binding><<Type>>.bind(...)` lines and the handler call argument
@@ -303,6 +402,8 @@ enum WireMVCDiagnostic: DiagnosticMessage {
     case missingResponseAnnotation(String)
     case jsonResponseOnVoid(String)
     case responseStatusOnValue(String)
+    case unsupportedRawParameter(name: String, type: String)
+    case rawRouteMissingSender(String)
 
     var message: String {
         switch self {
@@ -316,6 +417,10 @@ enum WireMVCDiagnostic: DiagnosticMessage {
             "@JSONResponse on '\(route)' requires a returned value; use @ResponseStatus for a Void handler"
         case .responseStatusOnValue(let route):
             "@ResponseStatus on '\(route)' requires a Void handler; use @JSONResponse to encode the returned value"
+        case .unsupportedRawParameter(let name, let type):
+            "@RawRoute parameter '\(name)' has unsupported type '\(type)' — a raw handler takes HTTPRequest, [String: Substring], the AsyncReader-constrained reader, and/or the HTTPResponseSender-constrained sender"
+        case .rawRouteMissingSender(let route):
+            "@RawRoute handler '\(route)' must take the response sender (a parameter generic over HTTPResponseSender) to write its response"
         }
     }
 
@@ -329,6 +434,8 @@ enum WireMVCDiagnostic: DiagnosticMessage {
         case .missingResponseAnnotation: id = "missingResponseAnnotation"
         case .jsonResponseOnVoid: id = "jsonResponseOnVoid"
         case .responseStatusOnValue: id = "responseStatusOnValue"
+        case .unsupportedRawParameter: id = "unsupportedRawParameter"
+        case .rawRouteMissingSender: id = "rawRouteMissingSender"
         }
         return MessageID(domain: "WireMVC", id: id)
     }

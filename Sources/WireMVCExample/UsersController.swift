@@ -1,3 +1,6 @@
+import BasicContainers
+import HTTPAPIs
+import HTTPTypes
 import Wire
 import WireMVC
 
@@ -36,5 +39,17 @@ struct UsersController: Sendable {
         @Header("x-trace") trace: String?  // optional @Header
     ) async throws -> Listing {
         Listing(limit: limit, cursor: cursor, trace: trace, users: store.list(limit: limit))
+    }
+
+    // A raw (streaming) route: `@RawRoute` hands the handler the response sender verbatim — no decode,
+    // no encode — and it writes the response itself. Generic over the sender (the builder's associated
+    // type); takes only the sender it needs.
+    @Get("/events/stream")
+    @RawRoute
+    func events<Sender: HTTPResponseSender & ~Copyable & SendableMetatype>(
+        responseSender: consuming sending Sender
+    ) async throws where Sender.Writer: ~Copyable {
+        var body = UniqueArray<UInt8>(copying: Array("data: hello\n\n".utf8))
+        try await responseSender.sendAndFinish(HTTPResponse(status: .ok), buffer: &body)
     }
 }
