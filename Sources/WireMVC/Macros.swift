@@ -72,3 +72,12 @@ public macro ResponseStatus(_ status: HTTPResponse.Status) =
 /// Stands in for the response annotation (a `@RawRoute` needs no `@JSONResponse`/`@ResponseStatus`).
 @attached(peer)
 public macro RawRoute() = #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
+/// Wrap a route (or, on the controller type, every route) in a `Middleware`. `T` is a graph binding
+/// that is the proposal's `Middleware` over the request/response box — it runs before the handler and
+/// can transform the box (e.g. enrich the `RequestContext`). Controller-scope `@Middleware` wraps
+/// outer, route-scope inner: `controller-outer → route-inner → handler`. The `@Controller` macro reads
+/// these off the type and each function; they expand to nothing themselves.
+@attached(peer)
+public macro Middleware<T>(_ type: T.Type) =
+    #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")

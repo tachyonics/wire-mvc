@@ -4,3 +4,7 @@
 // `registerWireRoutes(on:)` resolves these through here, without the author importing them.
 @_exported public import HTTPAPIs
 @_exported public import HTTPTypes
+// A middleware author conforms to `Middleware` and spells the box over the `AsyncReader`-constrained
+// reader, so a middleware (like a controller) needs only `import WireMVC`.
+@_exported public import AsyncStreaming
+@_exported public import Middleware

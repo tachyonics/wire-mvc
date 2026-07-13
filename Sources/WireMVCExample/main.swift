@@ -1,5 +1,6 @@
 import Logging
 import NIOHTTPServer
+import Synchronization  // the middleware probe (Atomic)
 import Wire  // WiringModel (for the /wiring check)
 import WireMVC
 
@@ -179,6 +180,14 @@ try await withThrowingTaskGroup(of: Void.self) { group in
     check(
         services.contains { $0 is Heartbeat },
         "@BackgroundService  → apply returns graph.services collating the Heartbeat service"
+    )
+
+    // @Middleware(RequestLogMiddleware<…>.self) — controller-scope middleware wrapped every route, so
+    // the probe counted once per request served above (all reached the handler through the fold).
+    let observedRequests = requestProbe.load(ordering: .relaxed)
+    check(
+        observedRequests > 0,
+        "@Middleware  → controller-scope middleware ran around every route (probe counted \(observedRequests))"
     )
 
     group.cancelAll()

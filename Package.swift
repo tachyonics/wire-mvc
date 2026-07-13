@@ -76,6 +76,10 @@ let package = Package(
                 "WireMVCMacros",
                 .product(name: "Wire", package: "swift-wire"),
                 .product(name: "HTTPAPIs", package: "swift-http-api-proposal"),
+                // The proposal's `Middleware`/`MiddlewareBuilder`/`ChainedMiddleware`. WireMVC's
+                // per-route chains are folds over these; the box they carry is WireMVC-owned (the
+                // proposal ships the box only in a test module), see Middleware.swift.
+                .product(name: "Middleware", package: "swift-http-api-proposal"),
                 .product(name: "AsyncStreaming", package: "swift-async-algorithms"),
                 .product(name: "HTTPTypes", package: "swift-http-types"),
                 .product(name: "BasicContainers", package: "swift-collections"),
