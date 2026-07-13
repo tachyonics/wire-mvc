@@ -30,6 +30,7 @@ where
         let handler:
             @Sendable (
                 HTTPRequest,
+                consuming RequestContext,
                 [String: Substring],
                 consuming sending Reader,
                 consuming sending ResponseSender
@@ -62,6 +63,7 @@ where
         handler:
             @escaping @Sendable (
                 HTTPRequest,
+                consuming RequestContext,
                 [String: Substring],
                 consuming sending Reader,
                 consuming sending ResponseSender
@@ -90,7 +92,7 @@ where
             try await responseSender.sendAndFinish(HTTPResponse(status: .notFound))
             return
         }
-        try await matched.route.handler(request, matched.parameters, reader, responseSender)
+        try await matched.route.handler(request, requestContext, matched.parameters, reader, responseSender)
     }
 
     // MARK: - Path templates

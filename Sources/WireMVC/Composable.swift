@@ -70,7 +70,7 @@ public enum WireMVC {
         Builder.ResponseSender.Writer: ~Copyable
     {
         let outcome = try WireMVCResponse.json(graph.introspect(), status: .ok)
-        builder.register(method: .get, path: path) { _, _, _, responseSender in
+        builder.register(method: .get, path: path) { _, _, _, _, responseSender in
             try await outcome.send(on: responseSender)
         }
     }

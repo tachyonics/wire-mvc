@@ -212,6 +212,7 @@ private struct ServerTransportRouteBuilder: RoutableHTTPServerBuilder {
     typealias Handler =
         @Sendable (
             HTTPRequest,
+            consuming BridgeRequestContext,
             [String: Substring],
             consuming sending BridgeReader,
             consuming sending BridgeResponseSender
@@ -252,6 +253,7 @@ private struct ServerTransportRouteBuilder: RoutableHTTPServerBuilder {
                         do {
                             try await handler(
                                 request,
+                                BridgeRequestContext(),
                                 metadata.pathParameters,
                                 BridgeReader(bytes),
                                 BridgeResponseSender(channel: channel)

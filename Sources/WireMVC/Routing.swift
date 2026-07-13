@@ -14,16 +14,18 @@ public protocol RoutableHTTPServerBuilder<RequestContext, Reader, ResponseSender
     associatedtype ResponseSender: HTTPResponseSender, ~Copyable, SendableMetatype
     where ResponseSender.Writer: ~Copyable
 
-    /// Register one route. `handler` receives the request, the matched path parameters, the request
-    /// body reader, and the response sender. WireMVC owns this shape: the proposal's handler
-    /// signature has no slot for matched path parameters, so the router extracts them from the
-    /// path template and passes them in.
+    /// Register one route. `handler` receives the request, the server's per-request `RequestContext`,
+    /// the matched path parameters, the request body reader, and the response sender. WireMVC owns this
+    /// shape: the proposal's handler signature has no slot for matched path parameters, so the router
+    /// extracts them from the path template and passes them in. The `RequestContext` is threaded so a
+    /// raw handler can read the server's capabilities, and so middleware can seed its box from it.
     mutating func register(
         method: HTTPRequest.Method,
         path: String,
         handler:
             @escaping @Sendable (
                 HTTPRequest,
+                consuming RequestContext,
                 [String: Substring],
                 consuming sending Reader,
                 consuming sending ResponseSender
