@@ -10,6 +10,7 @@ import WireMVC
 // `Wire.bootstrap()` + `WireMVC.router` register its routes onto the server.
 @Singleton
 @Controller("/users")
+@Middleware(RequestLogMiddleware<WireContext, WireReader, WireSender>.self)  // controller-scope, generic
 struct UsersController: Sendable {
     @Inject var store: UserStore
 
@@ -43,11 +44,13 @@ struct UsersController: Sendable {
 
     // A raw (streaming) route: `@RawRoute` hands the handler the response sender verbatim — no decode,
     // no encode — and it writes the response itself. Generic over the sender (the builder's associated
-    // type); takes only the sender it needs.
+    // type); takes only the sender it needs. The sender is `consuming` (not `consuming sending`) so the
+    // handler can also be reached through a middleware fold, where it arrives from the box's
+    // `withContents` as a plain `consuming` value.
     @Get("/events/stream")
     @RawRoute
     func events<Sender: HTTPResponseSender & ~Copyable & SendableMetatype>(
-        responseSender: consuming sending Sender
+        responseSender: consuming Sender
     ) async throws where Sender.Writer: ~Copyable {
         var body = UniqueArray<UInt8>(copying: Array("data: hello\n\n".utf8))
         try await responseSender.sendAndFinish(HTTPResponse(status: .ok), buffer: &body)

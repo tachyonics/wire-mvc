@@ -52,7 +52,7 @@ extension RequestBound {
 /// binding's `bind`.
 public enum WireMVCRequest {
     public static func collectBody<Reader: AsyncReader & ~Copyable>(
-        _ reader: consuming sending Reader,
+        _ reader: consuming Reader,
         maximumSize: Int = 1_000_000
     ) async throws -> [UInt8]
     where Reader.ReadElement == UInt8, Reader.FinalElement == HTTPFields? {

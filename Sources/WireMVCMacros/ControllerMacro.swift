@@ -19,6 +19,8 @@ public struct ControllerMacro: ExtensionMacro {
     ) throws -> [ExtensionDeclSyntax] {
         let prefix = firstStringLiteral(node.arguments) ?? ""
         let access = accessModifier(declaration.modifiers)
+        // Controller-scope `@Middleware` wraps every route, outer to each route's own middleware.
+        let controllerMiddleware = middlewareConstructions(from: declaration.attributes, in: context)
 
         var routeBlocks: [String] = []
         for member in declaration.memberBlock.members {
@@ -26,7 +28,13 @@ public struct ControllerMacro: ExtensionMacro {
             guard let verb = verb(from: function.attributes) else { continue }  // no verb → helper, skip
             // A route that fails validation is diagnosed at its offending node and skipped, so the
             // rest of the controller still generates (no cascade of downstream errors).
-            if let block = routeBlock(function: function, verb: verb, prefix: prefix, in: context) {
+            if let block = routeBlock(
+                function: function,
+                verb: verb,
+                prefix: prefix,
+                controllerMiddleware: controllerMiddleware,
+                in: context
+            ) {
                 routeBlocks.append(block)
             }
         }
@@ -54,11 +62,13 @@ public struct ControllerMacro: ExtensionMacro {
         function: FunctionDeclSyntax,
         verb: Verb,
         prefix: String,
+        controllerMiddleware: [String],
         in context: some MacroExpansionContext
     ) -> String? {
         let path = joinPath(prefix, verb.path ?? "")
+        let middleware = controllerMiddleware + middlewareConstructions(from: function.attributes, in: context)
         if hasRawRoute(function) {
-            return rawRouteBlock(function: function, verb: verb, path: path, in: context)
+            return rawRouteBlock(function: function, verb: verb, path: path, middleware: middleware, in: context)
         }
         let hasBody = routeHasBody(function)
         guard let (binds, callArgs) = parameterBindings(of: function, path: path, hasBody: hasBody, in: context)
@@ -69,11 +79,16 @@ public struct ControllerMacro: ExtensionMacro {
         let requestName = hasBinds ? "request" : "_"
         let parametersName = hasBinds ? "pathParameters" : "_"
         let readerName = hasBody ? "reader" : "_"
-        return """
-            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), _, \(parametersName), \(readerName), responseSender in
-            \(closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response))
-            }
-            """
+        return emitRegister(
+            verb: verb,
+            path: path,
+            middleware: middleware,
+            requestName: requestName,
+            contextName: "_",
+            parametersName: parametersName,
+            readerName: readerName,
+            terminalBody: closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response)
+        )
     }
 
     // MARK: - Raw route codegen
@@ -95,6 +110,7 @@ public struct ControllerMacro: ExtensionMacro {
         function: FunctionDeclSyntax,
         verb: Verb,
         path: String,
+        middleware: [String],
         in context: some MacroExpansionContext
     ) -> String? {
         let roles = rawGenericRoles(function)
@@ -143,12 +159,104 @@ public struct ControllerMacro: ExtensionMacro {
         let contextName = usesContext ? "requestContext" : "_"
         let parametersName = usesParameters ? "pathParameters" : "_"
         let readerName = usesReader ? "reader" : "_"
+        return emitRegister(
+            verb: verb,
+            path: path,
+            middleware: middleware,
+            requestName: requestName,
+            contextName: contextName,
+            parametersName: parametersName,
+            readerName: readerName,
+            terminalBody: "try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))"
+        )
+    }
+
+    // MARK: - Middleware
+
+    /// The `builder.register` call, wrapping the terminal in the route's middleware fold when there is
+    /// one. `requestName`/`contextName`/`parametersName`/`readerName` name (or `_`) the values the
+    /// *terminal* uses. With no middleware they name the register closure's params directly. With
+    /// middleware, the register closure binds request/context/reader/sender unconditionally to build the
+    /// base box, and the terminal re-binds its values off the folded final box via `withContents` —
+    /// path parameters are captured from the register closure (never boxed).
+    private static func emitRegister(
+        verb: Verb,
+        path: String,
+        middleware: [String],
+        requestName: String,
+        contextName: String,
+        parametersName: String,
+        readerName: String,
+        terminalBody: String
+    ) -> String {
+        guard !middleware.isEmpty else {
+            return """
+                builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(contextName), \(parametersName), \(readerName), responseSender in
+                \(terminalBody)
+                }
+                """
+        }
+        // `middleware` holds each fold entry's complete construction expression (concrete `C()` or
+        // generic `G<Builder.RequestContext, …>()`), computed by `middlewareConstructions`.
+        let fold = middleware.joined(separator: "\n")
         return """
-            builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(contextName), \(parametersName), \(readerName), responseSender in
-                try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))
+            builder.register(method: \(verb.method), path: "\(path)") { request, requestContext, \(parametersName), reader, responseSender in
+                let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                let wireMVCChain = wireCompose {
+            \(fold)
+                }
+                try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
+                    try await wireMVCFinalBox.withContents { \(requestName), \(contextName), \(readerName), responseSender in
+                    \(terminalBody)
+                    }
+                }
             }
             """
     }
+
+    /// The fold-entry construction expression for each `@Middleware(...)`, in written order. The macro
+    /// dispatches on the argument syntax:
+    /// - `Concrete.self` (no generic args) → `Concrete()` — a concrete middleware (fits only downstream
+    ///   of an erasing middleware, where the box is concrete; a misplacement is a compiler type error).
+    /// - `Generic<…>.self` (generic args) → `Generic<Builder.RequestContext, Builder.Reader,
+    ///   Builder.ResponseSender>()` — the written type args are WireMVC placeholders the macro discards,
+    ///   re-spelling over the builder's associated types (inference doesn't flow through the fold).
+    /// - anything else (a binding key) → diagnosed; injected middleware need the graph factory-lift and
+    ///   are not yet supported.
+    /// Only dep-free middleware are constructed here; injected/with-deps middleware come later.
+    private static func middlewareConstructions(
+        from attributes: AttributeListSyntax,
+        in context: some MacroExpansionContext
+    ) -> [String] {
+        var constructions: [String] = []
+        for case let .attribute(attr) in attributes
+        where attr.attributeName.trimmedDescription == "Middleware" {
+            guard
+                let arguments = attr.arguments?.as(LabeledExprListSyntax.self),
+                let first = arguments.first
+            else { continue }
+            let expression = first.expression.trimmedDescription
+            guard expression.hasSuffix(".self") else {
+                context.diagnose(
+                    Diagnostic(node: first.expression, message: WireMVCDiagnostic.middlewareBindingKeyUnsupported)
+                )
+                continue
+            }
+            let typeSpelling = String(expression.dropLast(".self".count))
+            if let angle = typeSpelling.firstIndex(of: "<") {
+                let name = typeSpelling[..<angle]
+                constructions.append("\(name)<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()")
+            } else {
+                constructions.append("\(typeSpelling)()")
+            }
+        }
+        return constructions
+    }
+}
+
+extension ControllerMacro {
+
+    // MARK: - Parameter binding & response
 
     /// Strip leading ownership/transfer specifiers (`consuming sending Sender` → `Sender`) so the base
     /// type matches a generic-parameter name or a concrete raw-primitive type.
@@ -308,6 +416,9 @@ public struct ControllerMacro: ExtensionMacro {
         }
         return false
     }
+}
+
+extension ControllerMacro {
 
     // MARK: - Attribute reading
 
@@ -411,6 +522,7 @@ enum WireMVCDiagnostic: DiagnosticMessage {
     case responseStatusOnValue(String)
     case unsupportedRawParameter(name: String, type: String)
     case rawRouteMissingSender(String)
+    case middlewareBindingKeyUnsupported
 
     var message: String {
         switch self {
@@ -428,6 +540,8 @@ enum WireMVCDiagnostic: DiagnosticMessage {
             "@RawRoute parameter '\(name)' has unsupported type '\(type)' — a raw handler takes HTTPRequest, [String: Substring], the AsyncReader-constrained reader, and/or the HTTPResponseSender-constrained sender"
         case .rawRouteMissingSender(let route):
             "@RawRoute handler '\(route)' must take the response sender (a parameter generic over HTTPResponseSender) to write its response"
+        case .middlewareBindingKeyUnsupported:
+            "@Middleware currently takes a middleware type — 'SomeMiddleware.self' (concrete) or 'SomeMiddleware<WireContext, WireReader, WireSender>.self' (generic); referencing a graph binding by key is not yet supported"
         }
     }
 
@@ -443,6 +557,7 @@ enum WireMVCDiagnostic: DiagnosticMessage {
         case .responseStatusOnValue: id = "responseStatusOnValue"
         case .unsupportedRawParameter: id = "unsupportedRawParameter"
         case .rawRouteMissingSender: id = "rawRouteMissingSender"
+        case .middlewareBindingKeyUnsupported: id = "middlewareBindingKeyUnsupported"
         }
         return MessageID(domain: "WireMVC", id: id)
     }

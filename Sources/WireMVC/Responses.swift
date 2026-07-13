@@ -16,9 +16,11 @@ public enum WireMVCOutcome: Sendable {
     case body([UInt8], HTTPResponse.Status)
     case status(HTTPResponse.Status)
 
-    /// Send this outcome on the response sender, consuming it.
+    /// Send this outcome on the response sender, consuming it. The sender is `consuming` (not `consuming
+    /// sending`): the terminal consumes it within its own region, and through a middleware fold it
+    /// arrives from the box's `withContents` as a plain `consuming` value (not `sending`).
     public func send<Sender: HTTPResponseSender & ~Copyable>(
-        on sender: consuming sending Sender
+        on sender: consuming Sender
     ) async throws where Sender.Writer: ~Copyable {
         switch self {
         case let .body(bytes, status):

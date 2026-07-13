@@ -13,6 +13,7 @@ private let macros: [String: any Macro.Type] = [
     "JSONResponse": RouteMarkerMacro.self,
     "ResponseStatus": RouteMarkerMacro.self,
     "RawRoute": RouteMarkerMacro.self,
+    "Middleware": RouteMarkerMacro.self,
 ]
 
 final class ControllerMacroTests: XCTestCase {
@@ -397,6 +398,204 @@ final class ControllerMacroTests: XCTestCase {
                         "@RawRoute handler 'f' must take the response sender (a parameter generic over HTTPResponseSender) to write its response",
                     line: 5,
                     column: 10
+                )
+            ],
+            macros: macros
+        )
+    }
+
+    // MARK: - Middleware
+
+    /// A generic middleware (case 2) is named with placeholder type args the macro discards, re-spelling
+    /// the middleware over the builder's associated types and folding it around the terminal.
+    func testGenericMiddlewareFold() {
+        assertMacroExpansion(
+            """
+            @Controller("/x")
+            @Middleware(LogMiddleware<WireContext, WireReader, WireSender>.self)
+            struct C {
+                @Get("/y")
+                @ResponseStatus(.noContent)
+                func f() async throws {
+                }
+            }
+            """,
+            expandedSource: """
+                struct C {
+                    func f() async throws {
+                    }
+                }
+
+                extension C: RouteContributor {
+                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    where
+                        Builder.RequestContext: ~Copyable,
+                        Builder.Reader: ~Copyable,
+                        Builder.ResponseSender: ~Copyable,
+                        Builder.ResponseSender.Writer: ~Copyable
+                    {
+                        builder.register(method: .get, path: "/x/y") { request, requestContext, _, reader, responseSender in
+                            let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                            let wireMVCChain = wireCompose {
+                                LogMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()
+                            }
+                            try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
+                                try await wireMVCFinalBox.withContents { _, _, _, responseSender in
+                                let wireMVCOutcome: WireMVCOutcome
+                                try await self.f()
+                                wireMVCOutcome = .status(.noContent)
+                                try await wireMVCOutcome.send(on: responseSender)
+                                }
+                            }
+                        }
+                    }
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    /// Controller-scope and route-scope `@Middleware` compose on one route, controller-outer to
+    /// route-inner (the order they appear in the `wireCompose` fold).
+    func testControllerAndRouteMiddlewareOrder() {
+        assertMacroExpansion(
+            """
+            @Controller("/x")
+            @Middleware(ControllerMiddleware<WireContext, WireReader, WireSender>.self)
+            struct C {
+                @Middleware(RouteMiddleware<WireContext, WireReader, WireSender>.self)
+                @Get("/y")
+                @ResponseStatus(.noContent)
+                func f() async throws {
+                }
+            }
+            """,
+            expandedSource: """
+                struct C {
+                    func f() async throws {
+                    }
+                }
+
+                extension C: RouteContributor {
+                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    where
+                        Builder.RequestContext: ~Copyable,
+                        Builder.Reader: ~Copyable,
+                        Builder.ResponseSender: ~Copyable,
+                        Builder.ResponseSender.Writer: ~Copyable
+                    {
+                        builder.register(method: .get, path: "/x/y") { request, requestContext, _, reader, responseSender in
+                            let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                            let wireMVCChain = wireCompose {
+                                ControllerMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()
+                                RouteMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()
+                            }
+                            try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
+                                try await wireMVCFinalBox.withContents { _, _, _, responseSender in
+                                let wireMVCOutcome: WireMVCOutcome
+                                try await self.f()
+                                wireMVCOutcome = .status(.noContent)
+                                try await wireMVCOutcome.send(on: responseSender)
+                                }
+                            }
+                        }
+                    }
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    /// A concrete middleware (case 1) on the route (not the controller) is constructed directly.
+    func testConcreteMiddlewareFold() {
+        assertMacroExpansion(
+            """
+            @Controller("/x")
+            struct C {
+                @Middleware(ConcreteMiddleware.self)
+                @Get("/y")
+                @ResponseStatus(.noContent)
+                func f() async throws {
+                }
+            }
+            """,
+            expandedSource: """
+                struct C {
+                    func f() async throws {
+                    }
+                }
+
+                extension C: RouteContributor {
+                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    where
+                        Builder.RequestContext: ~Copyable,
+                        Builder.Reader: ~Copyable,
+                        Builder.ResponseSender: ~Copyable,
+                        Builder.ResponseSender.Writer: ~Copyable
+                    {
+                        builder.register(method: .get, path: "/x/y") { request, requestContext, _, reader, responseSender in
+                            let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                            let wireMVCChain = wireCompose {
+                                ConcreteMiddleware()
+                            }
+                            try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
+                                try await wireMVCFinalBox.withContents { _, _, _, responseSender in
+                                let wireMVCOutcome: WireMVCOutcome
+                                try await self.f()
+                                wireMVCOutcome = .status(.noContent)
+                                try await wireMVCOutcome.send(on: responseSender)
+                                }
+                            }
+                        }
+                    }
+                }
+                """,
+            macros: macros
+        )
+    }
+
+    /// A non-`.self` argument (a binding key) is not yet supported and is diagnosed.
+    func testMiddlewareBindingKeyDiagnoses() {
+        assertMacroExpansion(
+            """
+            @Controller("/x")
+            @Middleware(someBindingKey)
+            struct C {
+                @Get("/y")
+                @ResponseStatus(.noContent)
+                func f() async throws {
+                }
+            }
+            """,
+            expandedSource: """
+                struct C {
+                    func f() async throws {
+                    }
+                }
+
+                extension C: RouteContributor {
+                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    where
+                        Builder.RequestContext: ~Copyable,
+                        Builder.Reader: ~Copyable,
+                        Builder.ResponseSender: ~Copyable,
+                        Builder.ResponseSender.Writer: ~Copyable
+                    {
+                        builder.register(method: .get, path: "/x/y") { _, _, _, _, responseSender in
+                            let wireMVCOutcome: WireMVCOutcome
+                            try await self.f()
+                            wireMVCOutcome = .status(.noContent)
+                            try await wireMVCOutcome.send(on: responseSender)
+                        }
+                    }
+                }
+                """,
+            diagnostics: [
+                DiagnosticSpec(
+                    message:
+                        "@Middleware currently takes a middleware type — 'SomeMiddleware.self' (concrete) or 'SomeMiddleware<WireContext, WireReader, WireSender>.self' (generic); referencing a graph binding by key is not yet supported",
+                    line: 2,
+                    column: 13
                 )
             ],
             macros: macros
