@@ -252,6 +252,11 @@ public struct ControllerMacro: ExtensionMacro {
         }
         return constructions
     }
+}
+
+extension ControllerMacro {
+
+    // MARK: - Parameter binding & response
 
     /// Strip leading ownership/transfer specifiers (`consuming sending Sender` → `Sender`) so the base
     /// type matches a generic-parameter name or a concrete raw-primitive type.
@@ -411,6 +416,9 @@ public struct ControllerMacro: ExtensionMacro {
         }
         return false
     }
+}
+
+extension ControllerMacro {
 
     // MARK: - Attribute reading
 

@@ -1,7 +1,7 @@
 public import AsyncStreaming
+public import BasicContainers
 public import HTTPAPIs
 public import HTTPTypes
-public import BasicContainers
 
 // Placeholder server types, used *only* to name a generic middleware in `@Middleware`. A generic type
 // can't be named `Generic.self` (no metatype without type arguments), so a generic middleware is written
