@@ -435,12 +435,12 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender.Writer: ~Copyable
                     {
                         builder.register(method: .get, path: "/x/y") { request, requestContext, _, reader, responseSender in
-                            let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                            let wireMVCBaseBox = RequestResponseMiddlewareBox.pending(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
                             let wireMVCChain = wireCompose {
                                 LogMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()
                             }
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
-                                try await wireMVCFinalBox.withContents { _, _, _, responseSender in
+                                try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
                                 try await self.f()
                                 wireMVCOutcome = .status(.noContent)
@@ -485,13 +485,13 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender.Writer: ~Copyable
                     {
                         builder.register(method: .get, path: "/x/y") { request, requestContext, _, reader, responseSender in
-                            let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                            let wireMVCBaseBox = RequestResponseMiddlewareBox.pending(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
                             let wireMVCChain = wireCompose {
                                 ControllerMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()
                                 RouteMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()
                             }
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
-                                try await wireMVCFinalBox.withContents { _, _, _, responseSender in
+                                try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
                                 try await self.f()
                                 wireMVCOutcome = .status(.noContent)
@@ -534,12 +534,12 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender.Writer: ~Copyable
                     {
                         builder.register(method: .get, path: "/x/y") { request, requestContext, _, reader, responseSender in
-                            let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                            let wireMVCBaseBox = RequestResponseMiddlewareBox.pending(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
                             let wireMVCChain = wireCompose {
                                 ConcreteMiddleware()
                             }
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
-                                try await wireMVCFinalBox.withContents { _, _, _, responseSender in
+                                try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
                                 try await self.f()
                                 wireMVCOutcome = .status(.noContent)

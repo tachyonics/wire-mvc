@@ -103,10 +103,18 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         )
     }
 
-    // @Delete("/{id}") @ResponseStatus(.noContent) — 204, no body
+    // @Delete("/{id}") @ResponseStatus(.noContent), guarded by the route-scope @Middleware(RequireAdmin).
+    // With x-admin the gate forwards and the handler runs → 204.
     do {
-        let (status, body) = try await send("DELETE", "/users/42", port: port)
-        check(status == 204 && body.isEmpty, "DELETE /users/42  → 204, @ResponseStatus, empty body")
+        let (status, body) = try await send("DELETE", "/users/42", port: port, headers: ["x-admin": "true"])
+        check(status == 204 && body.isEmpty, "DELETE /users/42 (x-admin)  → 204, @ResponseStatus, empty body")
+    }
+
+    // Without x-admin the gate handles the request itself — writes 403, the box becomes .responded, and
+    // the handler is skipped (Model B short-circuit); the controller-scope middleware still ran.
+    do {
+        let (status, _) = try await send("DELETE", "/users/99", port: port)
+        check(status == 403, "DELETE /users/99 (no x-admin)  → 403, @Middleware gate responded, handler skipped")
     }
 
     // @JSONBody content-type rules. (The lenient-on-a-genuinely-missing-Content-Type path is a

@@ -201,12 +201,12 @@ public struct ControllerMacro: ExtensionMacro {
         let fold = middleware.joined(separator: "\n")
         return """
             builder.register(method: \(verb.method), path: "\(path)") { request, requestContext, \(parametersName), reader, responseSender in
-                let wireMVCBaseBox = RequestResponseMiddlewareBox(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                let wireMVCBaseBox = RequestResponseMiddlewareBox.pending(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
                 let wireMVCChain = wireCompose {
             \(fold)
                 }
                 try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
-                    try await wireMVCFinalBox.withContents { \(requestName), \(contextName), \(readerName), responseSender in
+                    try await wireMVCFinalBox.withPendingContents { \(requestName), \(contextName), \(readerName), responseSender in
                     \(terminalBody)
                     }
                 }

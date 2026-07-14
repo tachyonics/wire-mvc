@@ -3,18 +3,22 @@ public import HTTPAPIs
 public import HTTPTypes
 public import Middleware
 
-/// The box a middleware chain carries as its `Middleware.Input`/`NextInput` — a fixed request plus the
-/// server's per-request `RequestContext`, request `Reader`, and `ResponseSender`. Middleware transform
-/// it (`Input → NextInput`, typically enriching the capability-typed `RequestContext`); the generated
-/// route terminal explodes the folded final box via `withContents` and projects the handler's params
-/// off it.
+/// The box a middleware chain carries as its `Middleware.Input`/`NextInput`. It is a two-state value:
+/// `pending` holds the handler inputs (a fixed request, the per-request `RequestContext`, the request
+/// `Reader`) plus the one-shot `ResponseSender`; `responded` means a middleware already wrote the
+/// response — the sender is consumed and gone, and only the request is kept so always-run observe
+/// middleware can still read it.
 ///
-/// It is structurally the proposal's `RequestResponseMiddlewareBox`, but WireMVC-owned: the proposal
-/// ships that type only in its `HTTPClientConformance` test module (referenced by nothing, and pulling
-/// the whole NIO server stack), so it is not a viable runtime dependency for this framework-agnostic
-/// core. The middleware themselves stay the proposal's `Middleware`; only this `Input`/`NextInput` box
-/// is ours.
-public struct RequestResponseMiddlewareBox<
+/// This shape is a *consequence* of the proposal's `Middleware.intercept<Return>(input:next:) -> Return`:
+/// the only value of type `Return` is what `next` produces, so every middleware must call `next` (no
+/// control-flow short-circuit). A middleware that wants to respond therefore does so by *writing* via
+/// the sender and moving the box to `responded`, and the whole chain still runs — the terminal simply
+/// skips the handler when the box is already `responded`. Changing that (letting inner middleware be
+/// skipped) would require changing the middleware *shape*, not this box. See Notes/WireMVCMiddleware.md.
+///
+/// It is WireMVC-owned (the proposal ships its own box only in a test module, referenced by nothing and
+/// pulling the whole NIO server stack); the middleware themselves stay the proposal's `Middleware`.
+public enum RequestResponseMiddlewareBox<
     RequestContext: HTTPServerCapability.RequestContext & ~Copyable,
     Reader: AsyncReader & ~Copyable,
     ResponseSender: HTTPResponseSender & ~Copyable
@@ -24,36 +28,60 @@ where
     Reader.FinalElement == HTTPFields?,
     ResponseSender.Writer: ~Copyable
 {
-    private let request: HTTPRequest
-    private let requestContext: RequestContext
-    private let reader: Reader
-    private let responseSender: ResponseSender
+    /// Still to be handled: the handler inputs and the one-shot sender.
+    case pending(request: HTTPRequest, requestContext: RequestContext, reader: Reader, responseSender: ResponseSender)
+    /// A middleware has written the response; the sender is consumed. The request is kept for observation.
+    case responded(request: HTTPRequest)
 
-    public init(
-        request: HTTPRequest,
-        requestContext: consuming RequestContext,
-        reader: consuming Reader,
-        responseSender: consuming ResponseSender
-    ) {
-        self.request = request
-        self.requestContext = requestContext
-        self.reader = reader
-        self.responseSender = responseSender
+    /// A borrowing peek at the request — readable in either state — so a middleware can inspect it
+    /// without consuming the box (it still has to pass the box to `next`).
+    public var peekedRequest: HTTPRequest {
+        switch self {
+        case .pending(let request, _, _, _): return request
+        case .responded(let request): return request
+        }
     }
 
-    /// The one-shot consuming destructure the generated terminal calls to reach the boxed values. `T`
-    /// is `~Copyable` — unlike the proposal's test-module box (`<T>`) — because a middleware that
-    /// destructures inside its `intercept` returns the chain's `~Copyable` `Return`.
-    public consuming func withContents<T: ~Copyable>(
+    /// Whether the request is still to be handled (no middleware has responded yet).
+    public var isPending: Bool {
+        switch self {
+        case .pending: return true
+        case .responded: return false
+        }
+    }
+
+    /// A middleware "handles" the request: `write` is handed the sender (consuming it) to write the
+    /// response, and the box becomes `responded`. If the box is already `responded`, it is returned
+    /// unchanged — first-decision-wins, enforced by there being no sender to hand over.
+    public consuming func responding(
+        _ write: nonisolated(nonsending) (consuming ResponseSender) async throws -> Void
+    ) async throws -> Self {
+        switch consume self {
+        case .pending(let request, _, _, let responseSender):
+            try await write(responseSender)
+            return .responded(request: request)
+        case .responded(let request):
+            return .responded(request: request)
+        }
+    }
+
+    /// The generated terminal's destructure: run `handler` with the pending contents, or do nothing if
+    /// a middleware already responded.
+    public consuming func withPendingContents(
         _ handler:
             nonisolated(nonsending) (
                 HTTPRequest,
                 consuming RequestContext,
                 consuming Reader,
                 consuming ResponseSender
-            ) async throws -> T
-    ) async throws -> T {
-        try await handler(self.request, self.requestContext, self.reader, self.responseSender)
+            ) async throws -> Void
+    ) async throws {
+        switch consume self {
+        case .pending(let request, let requestContext, let reader, let responseSender):
+            try await handler(request, requestContext, reader, responseSender)
+        case .responded:
+            break
+        }
     }
 }
 
@@ -63,7 +91,7 @@ extension RequestResponseMiddlewareBox: Sendable {}
 /// Builds a route's middleware chain into a *concrete* composed `Middleware` (the `MiddlewareBuilder`
 /// fold's inferred `ChainedMiddleware…` type), rather than erasing to `some Middleware`. Returning the
 /// concrete type keeps the fold's final box type inferred, which is what lets the terminal call
-/// `withContents` on it — a `some Middleware<Input>`-with-pinned-input boundary is not expressible
+/// `withPendingContents` on it — a `some Middleware<Input>`-with-pinned-input boundary is not expressible
 /// (`Middleware` has two primary associated types), so the fold must stay witness-local and concrete.
 /// The generated `registerWireRoutes` witness calls this inline with the route's middleware.
 public func wireCompose<Composed: Middleware>(
