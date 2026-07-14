@@ -28,6 +28,7 @@ struct UsersController: Sendable {
 
     @Delete("/{id}")
     @ResponseStatus(.noContent)
+    @Middleware(RequireAdmin<WireContext, WireReader, WireSender>.self)  // route-scope gate
     func delete(@Path id: String) async throws {
         store.delete(id)
     }
