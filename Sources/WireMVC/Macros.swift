@@ -11,18 +11,30 @@ public import Wire
 /// `@Contributes`.
 public let wireMVCControllerAlias = WireAdapterAnnotationV1(
     annotation: "Controller",
-    contributesTo: WireMVCKeys.routeContributors
+    capability: .contributes(to: WireMVCKeys.routeContributors)
+)
+
+/// `@Middleware(key)` declares that the annotated controller requires the factory synthesised from the
+/// keyed `@Factory` middleware template — the `.injectsFactoryOnArgument` capability. The plugin lifts
+/// the factory onto the controller through the `@Controller` macro's wrapping init. (The `.self` forms
+/// of `@Middleware` are read inline by `@Controller` and constructed there, not factory cases; the
+/// synthesis skips them.)
+public let wireMVCMiddlewareFactoryAlias = WireAdapterAnnotationV1(
+    annotation: "Middleware",
+    capability: .injectsFactoryOnArgument
 )
 
 /// Generates a `RouteContributor` conformance registering each `@Get`/`@Post`/… route onto a
 /// `some RoutableHTTPServerBuilder`, under the optional path prefix. `@Singleton @Controller("/users")`
 /// is all an app-scoped controller needs.
+@attached(member, names: named(init), arbitrary)
 @attached(extension, conformances: RouteContributor, names: named(registerWireRoutes(on:)))
 public macro Controller(_ path: String) =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 
 /// Generates the `RouteContributor` conformance with no path prefix (routes carry the full path on
 /// their verb annotation).
+@attached(member, names: named(init), arbitrary)
 @attached(extension, conformances: RouteContributor, names: named(registerWireRoutes(on:)))
 public macro Controller() =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
@@ -80,4 +92,12 @@ public macro RawRoute() = #externalMacro(module: "WireMVCMacros", type: "RouteMa
 /// these off the type and each function; they expand to nothing themselves.
 @attached(peer)
 public macro Middleware<T>(_ type: T.Type) =
+    #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
+/// The factory case — `@Middleware(key)` where `key` is a `FactoryKey` naming a generic-with-deps
+/// middleware's `@Factory` template. The plugin synthesises the factory (`_WireFactory_<key>`), lifts
+/// it onto the controller, and the `@Controller` macro calls its `create` in the fold. See
+/// `wireMVCMiddlewareFactoryAlias`.
+@attached(peer)
+public macro Middleware(_ key: FactoryKey) =
     #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")

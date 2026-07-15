@@ -30,5 +30,5 @@ public macro BackgroundService() =
 /// `@Contributes`.
 public let wireMVCServiceAlias = WireAdapterAnnotationV1(
     annotation: "BackgroundService",
-    contributesTo: WireMVCKeys.services
+    capability: .contributes(to: WireMVCKeys.services)
 )

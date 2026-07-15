@@ -554,12 +554,14 @@ final class ControllerMacroTests: XCTestCase {
         )
     }
 
-    /// A non-`.self` argument (a binding key) is not yet supported and is diagnosed.
-    func testMiddlewareBindingKeyDiagnoses() {
+    /// A `@Middleware(key)` (a `FactoryKey`, not `.self`) lifts the plugin-synthesised factory onto the
+    /// controller: the member role adds a `_wireFactory_<key>` IUO property + a wrapping init, and the
+    /// fold calls its `create` at the builder's box types.
+    func testMiddlewareFactoryKeyLifts() {
         assertMacroExpansion(
             """
             @Controller("/x")
-            @Middleware(someBindingKey)
+            @Middleware(Keys.session)
             struct C {
                 @Get("/y")
                 @ResponseStatus(.noContent)
@@ -571,6 +573,12 @@ final class ControllerMacroTests: XCTestCase {
                 struct C {
                     func f() async throws {
                     }
+
+                    var _wireFactory_Keys_session: _WireFactory_Keys_session! = nil
+
+                    init(_wireFactory_Keys_session: _WireFactory_Keys_session) {
+                        self._wireFactory_Keys_session = _wireFactory_Keys_session
+                    }
                 }
 
                 extension C: RouteContributor {
@@ -581,23 +589,23 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender: ~Copyable,
                         Builder.ResponseSender.Writer: ~Copyable
                     {
-                        builder.register(method: .get, path: "/x/y") { _, _, _, _, responseSender in
-                            let wireMVCOutcome: WireMVCOutcome
-                            try await self.f()
-                            wireMVCOutcome = .status(.noContent)
-                            try await wireMVCOutcome.send(on: responseSender)
+                        builder.register(method: .get, path: "/x/y") { request, requestContext, _, reader, responseSender in
+                            let wireMVCBaseBox = RequestResponseMiddlewareBox.pending(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+                            let wireMVCChain = wireCompose {
+                                self._wireFactory_Keys_session.create(Builder.RequestContext.self, Builder.Reader.self, Builder.ResponseSender.self)
+                            }
+                            try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
+                                try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
+                                let wireMVCOutcome: WireMVCOutcome
+                                try await self.f()
+                                wireMVCOutcome = .status(.noContent)
+                                try await wireMVCOutcome.send(on: responseSender)
+                                }
+                            }
                         }
                     }
                 }
                 """,
-            diagnostics: [
-                DiagnosticSpec(
-                    message:
-                        "@Middleware currently takes a middleware type — 'SomeMiddleware.self' (concrete) or 'SomeMiddleware<WireContext, WireReader, WireSender>.self' (generic); referencing a graph binding by key is not yet supported",
-                    line: 2,
-                    column: 13
-                )
-            ],
             macros: macros
         )
     }

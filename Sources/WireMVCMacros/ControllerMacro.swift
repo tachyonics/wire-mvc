@@ -20,7 +20,7 @@ public struct ControllerMacro: ExtensionMacro {
         let prefix = firstStringLiteral(node.arguments) ?? ""
         let access = accessModifier(declaration.modifiers)
         // Controller-scope `@Middleware` wraps every route, outer to each route's own middleware.
-        let controllerMiddleware = middlewareConstructions(from: declaration.attributes, in: context)
+        let controllerMiddleware = middlewareConstructions(from: declaration.attributes)
 
         var routeBlocks: [String] = []
         for member in declaration.memberBlock.members {
@@ -66,7 +66,7 @@ public struct ControllerMacro: ExtensionMacro {
         in context: some MacroExpansionContext
     ) -> String? {
         let path = joinPath(prefix, verb.path ?? "")
-        let middleware = controllerMiddleware + middlewareConstructions(from: function.attributes, in: context)
+        let middleware = controllerMiddleware + middlewareConstructions(from: function.attributes)
         if hasRawRoute(function) {
             return rawRouteBlock(function: function, verb: verb, path: path, middleware: middleware, in: context)
         }
@@ -221,13 +221,12 @@ public struct ControllerMacro: ExtensionMacro {
     /// - `Generic<…>.self` (generic args) → `Generic<Builder.RequestContext, Builder.Reader,
     ///   Builder.ResponseSender>()` — the written type args are WireMVC placeholders the macro discards,
     ///   re-spelling over the builder's associated types (inference doesn't flow through the fold).
-    /// - anything else (a binding key) → diagnosed; injected middleware need the graph factory-lift and
-    ///   are not yet supported.
-    /// Only dep-free middleware are constructed here; injected/with-deps middleware come later.
-    private static func middlewareConstructions(
-        from attributes: AttributeListSyntax,
-        in context: some MacroExpansionContext
-    ) -> [String] {
+    /// - a key reference (not `.self`) → `self._wireFactory_<key>.create(Builder.RequestContext.self,
+    ///   Builder.Reader.self, Builder.ResponseSender.self)` — the generic-with-deps factory case. The
+    ///   plugin synthesises `_WireFactory_<key>` and lifts it onto the controller (the member role adds
+    ///   the property + wrapping init); the fold calls its `create`, specialised at the builder's box
+    ///   associated types.
+    private static func middlewareConstructions(from attributes: AttributeListSyntax) -> [String] {
         var constructions: [String] = []
         for case let .attribute(attr) in attributes
         where attr.attributeName.trimmedDescription == "Middleware" {
@@ -237,8 +236,9 @@ public struct ControllerMacro: ExtensionMacro {
             else { continue }
             let expression = first.expression.trimmedDescription
             guard expression.hasSuffix(".self") else {
-                context.diagnose(
-                    Diagnostic(node: first.expression, message: WireMVCDiagnostic.middlewareBindingKeyUnsupported)
+                let property = factoryPropertyName(forKey: expression)
+                constructions.append(
+                    "self.\(property).create(Builder.RequestContext.self, Builder.Reader.self, Builder.ResponseSender.self)"
                 )
                 continue
             }
@@ -251,6 +251,119 @@ public struct ControllerMacro: ExtensionMacro {
             }
         }
         return constructions
+    }
+
+    // MARK: - Factory-lift naming (macro ↔ plugin handshake)
+
+    /// Derive the synthesised factory names from a `@Middleware(key)`'s canonical key text, using the
+    /// same sanitiser swift-wire's synthesis uses (`sanitizedKeyFragment`: any character outside
+    /// `[A-Za-z0-9_]` → `_`). Both sides must agree so the plugin's construction call resolves to the
+    /// macro-generated wrapping init and the fold's `create` names the lifted property.
+    private static func sanitizedKeyFragment(_ key: String) -> String {
+        String(key.map { $0.isLetter || $0.isNumber || $0 == "_" ? $0 : "_" })
+    }
+    private static func factoryPropertyName(forKey key: String) -> String {
+        "_wireFactory_" + sanitizedKeyFragment(key)
+    }
+    private static func factoryTypeName(forKey key: String) -> String {
+        "_WireFactory_" + sanitizedKeyFragment(key)
+    }
+}
+
+// MARK: - Member role: factory-lift ivars + wrapping init
+
+extension ControllerMacro: MemberMacro {
+    /// For each `@Middleware(key)` the controller consumes (controller- or route-scope), lift the
+    /// plugin-synthesised factory onto the controller: add a `_wireFactory_<key>` property and one
+    /// wrapping init that receives it. The property is an **IUO with a default** — `@Singleton`'s own
+    /// generated init can't see it (member macros don't see each other's members), and the default is
+    /// what lets that init still compile; the wrapping init populates it, and the plugin's construction
+    /// call (the controller's `@Inject` deps followed by the appended factory deps) resolves to *this*
+    /// init. Proven in spike-18.
+    public static func expansion(
+        of node: AttributeSyntax,
+        providingMembersOf declaration: some DeclGroupSyntax,
+        conformingTo protocols: [TypeSyntax],
+        in context: some MacroExpansionContext
+    ) throws -> [DeclSyntax] {
+        var keys: [String] = []
+        func collect(_ attributes: AttributeListSyntax) {
+            for case let .attribute(attr) in attributes
+            where attr.attributeName.trimmedDescription == "Middleware" {
+                guard let arguments = attr.arguments?.as(LabeledExprListSyntax.self),
+                    let first = arguments.first
+                else { continue }
+                let expression = first.expression.trimmedDescription
+                guard !expression.hasSuffix(".self") else { continue }  // concrete case — nothing to lift
+                if !keys.contains(expression) { keys.append(expression) }  // dedupe, first-seen order
+            }
+        }
+        collect(declaration.attributes)
+        for member in declaration.memberBlock.members {
+            if let function = member.decl.as(FunctionDeclSyntax.self) {
+                collect(function.attributes)
+            }
+        }
+        guard !keys.isEmpty else { return [] }
+
+        let dependencies = injectInitDependencies(in: declaration)
+        let access = accessModifier(declaration.modifiers)
+
+        var members: [DeclSyntax] = []
+        for key in keys {
+            members.append(
+                "var \(raw: factoryPropertyName(forKey: key)): \(raw: factoryTypeName(forKey: key))! = nil"
+            )
+        }
+
+        let parameters =
+            (dependencies.map { "\($0.name): \($0.type)" }
+            + keys.map { "\(factoryPropertyName(forKey: $0)): \(factoryTypeName(forKey: $0))" })
+            .joined(separator: ", ")
+        let assignments =
+            (dependencies.map { "    self.\($0.name) = \($0.name)" }
+            + keys.map { "    self.\(factoryPropertyName(forKey: $0)) = \(factoryPropertyName(forKey: $0))" })
+            .joined(separator: "\n")
+        members.append(
+            """
+            \(raw: access)init(\(raw: parameters)) {
+            \(raw: assignments)
+            }
+            """
+        )
+        return members
+    }
+
+    /// The controller's `@Inject` init-time dependencies in declaration order — the leading parameters
+    /// of the wrapping init, matching what the plugin emits before the appended factory deps. Mirrors
+    /// swift-wire's rule: non-`weak` `@Inject` stored properties are init parameters; `@Inject weak var`
+    /// is post-construction and excluded. (A user-written `@Inject init` is not handled here — the 3.1
+    /// controller shape is `@Inject` properties.)
+    private static func injectInitDependencies(
+        in declaration: some DeclGroupSyntax
+    ) -> [(name: String, type: String)] {
+        var dependencies: [(name: String, type: String)] = []
+        for member in declaration.memberBlock.members {
+            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
+            let hasInject = varDecl.attributes.contains { element in
+                guard let name = element.as(AttributeSyntax.self)?.attributeName.trimmedDescription else {
+                    return false
+                }
+                return name == "Inject" || name == "Wire::Inject"
+            }
+            guard hasInject else { continue }
+            let isStatic = varDecl.modifiers.contains { ["static", "class"].contains($0.name.text) }
+            let isWeak = varDecl.modifiers.contains { $0.name.text == "weak" }
+            let isLet = varDecl.bindingSpecifier.tokenKind == .keyword(.let)
+            guard !isStatic, !(isWeak && !isLet) else { continue }
+            for binding in varDecl.bindings {
+                guard let name = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text,
+                    let type = binding.typeAnnotation?.type.trimmedDescription
+                else { continue }
+                dependencies.append((name: name, type: type))
+            }
+        }
+        return dependencies
     }
 }
 
