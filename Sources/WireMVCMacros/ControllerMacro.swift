@@ -318,11 +318,11 @@ extension ControllerMacro: MemberMacro {
 
         let parameters =
             (dependencies.map { "\($0.name): \($0.type)" }
-                + keys.map { "\(factoryPropertyName(forKey: $0)): \(factoryTypeName(forKey: $0))" })
+            + keys.map { "\(factoryPropertyName(forKey: $0)): \(factoryTypeName(forKey: $0))" })
             .joined(separator: ", ")
         let assignments =
             (dependencies.map { "    self.\($0.name) = \($0.name)" }
-                + keys.map { "    self.\(factoryPropertyName(forKey: $0)) = \(factoryPropertyName(forKey: $0))" })
+            + keys.map { "    self.\(factoryPropertyName(forKey: $0)) = \(factoryPropertyName(forKey: $0))" })
             .joined(separator: "\n")
         members.append(
             """
