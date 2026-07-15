@@ -10,7 +10,8 @@ import WireMVC
 // `Wire.bootstrap()` + `WireMVC.router` register its routes onto the server.
 @Singleton
 @Controller("/users")
-@Middleware(RequestLogMiddleware<WireContext, WireReader, WireSender>.self)  // controller-scope, generic
+@Middleware(RequestLogMiddleware<WireContext, WireReader, WireSender>.self)  // controller-scope, generic dep-free
+@Middleware(SessionMiddlewareKeys.factory)  // controller-scope, generic-with-deps (factory-lifted by key)
 struct UsersController: Sendable {
     @Inject var store: UserStore
 
