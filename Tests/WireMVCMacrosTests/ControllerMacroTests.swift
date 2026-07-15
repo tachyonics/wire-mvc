@@ -37,7 +37,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension Todos: RouteContributor {
+                struct _WireRouteContributor_Todos: RouteContributor, Sendable {
+                    let controller: Todos
+                    init(_ controller: Todos) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -49,7 +53,7 @@ final class ControllerMacroTests: XCTestCase {
                             let wireMVCOutcome: WireMVCOutcome
                             do {
                                 let id = try await Path<String>.bind(name: "id", request: request, pathParameters: pathParameters, body: nil)
-                                wireMVCOutcome = try WireMVCResponse.json(try await self.get(id: id), status: .ok)
+                                wireMVCOutcome = try WireMVCResponse.json(try await self.controller.get(id: id), status: .ok)
                             } catch let wireMVCBindingError as WireMVCBindingError {
                                 wireMVCOutcome = .status(wireMVCBindingError.status)
                             }
@@ -81,7 +85,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -124,7 +132,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -165,7 +177,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -206,7 +222,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -248,7 +268,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -295,7 +319,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -304,7 +332,7 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender.Writer: ~Copyable
                     {
                         builder.register(method: .get, path: "/users/events") { _, _, _, _, responseSender in
-                            try await self.events(responseSender: responseSender)
+                            try await self.controller.events(responseSender: responseSender)
                         }
                     }
                 }
@@ -345,7 +373,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -354,7 +386,7 @@ final class ControllerMacroTests: XCTestCase {
                         Builder.ResponseSender.Writer: ~Copyable
                     {
                         builder.register(method: .get, path: "/users/whoami") { _, requestContext, _, _, responseSender in
-                            try await self.whoami(context: requestContext, responseSender: responseSender)
+                            try await self.controller.whoami(context: requestContext, responseSender: responseSender)
                         }
                     }
                 }
@@ -380,7 +412,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -426,7 +462,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -442,7 +482,7 @@ final class ControllerMacroTests: XCTestCase {
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
                                 try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
-                                try await self.f()
+                                try await self.controller.f()
                                 wireMVCOutcome = .status(.noContent)
                                 try await wireMVCOutcome.send(on: responseSender)
                                 }
@@ -476,7 +516,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -493,7 +537,7 @@ final class ControllerMacroTests: XCTestCase {
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
                                 try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
-                                try await self.f()
+                                try await self.controller.f()
                                 wireMVCOutcome = .status(.noContent)
                                 try await wireMVCOutcome.send(on: responseSender)
                                 }
@@ -525,7 +569,11 @@ final class ControllerMacroTests: XCTestCase {
                     }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    init(_ controller: C) {
+                        self.controller = controller
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -541,7 +589,7 @@ final class ControllerMacroTests: XCTestCase {
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
                                 try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
-                                try await self.f()
+                                try await self.controller.f()
                                 wireMVCOutcome = .status(.noContent)
                                 try await wireMVCOutcome.send(on: responseSender)
                                 }
@@ -555,8 +603,9 @@ final class ControllerMacroTests: XCTestCase {
     }
 
     /// A `@Middleware(key)` (a `FactoryKey`, not `.self`) lifts the plugin-synthesised factory onto the
-    /// controller: the member role adds a `_wireFactory_<key>` IUO property + a wrapping init, and the
-    /// fold calls its `create` at the builder's box types.
+    /// controller's route-contributor proxy: the proxy gains a `_wireFactory_<key>` field (alongside the
+    /// controller) and the fold calls its `create` at the builder's box types. The controller itself is
+    /// left untouched — a plain, footgun-free binding.
     func testMiddlewareFactoryKeyLifts() {
         assertMacroExpansion(
             """
@@ -573,15 +622,15 @@ final class ControllerMacroTests: XCTestCase {
                 struct C {
                     func f() async throws {
                     }
-
-                    var _wireFactory_Keys_session: _WireFactory_Keys_session! = nil
-
-                    init(_wireFactory_Keys_session: _WireFactory_Keys_session) {
-                        self._wireFactory_Keys_session = _wireFactory_Keys_session
-                    }
                 }
 
-                extension C: RouteContributor {
+                struct _WireRouteContributor_C: RouteContributor, Sendable {
+                    let controller: C
+                    let _wireFactory_Keys_session: _WireFactory_Keys_session
+                    init(_ controller: C, _wireFactory_Keys_session: _WireFactory_Keys_session) {
+                        self.controller = controller
+                        self._wireFactory_Keys_session = _wireFactory_Keys_session
+                    }
                     func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
@@ -597,7 +646,7 @@ final class ControllerMacroTests: XCTestCase {
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
                                 try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
-                                try await self.f()
+                                try await self.controller.f()
                                 wireMVCOutcome = .status(.noContent)
                                 try await wireMVCOutcome.send(on: responseSender)
                                 }
