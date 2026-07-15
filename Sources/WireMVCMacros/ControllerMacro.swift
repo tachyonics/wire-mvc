@@ -9,22 +9,28 @@ import SwiftSyntaxMacros
 /// `some RoutableHTTPServerBuilder` and restates the inverse (`~Copyable`) requirements, because they
 /// don't propagate across the generic boundary; the response is computed into a `WireMVCOutcome`
 /// first, so the `consuming` sender is consumed exactly once.
-public struct ControllerMacro: ExtensionMacro {
+public struct ControllerMacro: PeerMacro {
+    /// Generate the controller's **route-contributor proxy** — a peer type that holds the controller
+    /// (built its ordinary way) plus every factory the controller's `@Middleware(key)` use-sites demand,
+    /// conforms to `RouteContributor`, and carries the route witness. The controller itself stays a
+    /// plain `@Singleton` — no wrapping init, no factory ivar, no wrong way to build it. The witness
+    /// calls the controller's handlers through `self.controller` and folds each keyed middleware through
+    /// `self._wireFactory_<key>.create(...)`. The name (`_WireRouteContributor_<Controller>`) and the
+    /// factory names are the macro↔plugin handshake: swift-wire's contributor-proxy synthesis
+    /// constructs *this* type and lifts the demanded factories onto it.
     public static func expansion(
         of node: AttributeSyntax,
-        attachedTo declaration: some DeclGroupSyntax,
-        providingExtensionsOf type: some TypeSyntaxProtocol,
-        conformingTo protocols: [TypeSyntax],
+        providingPeersOf declaration: some DeclSyntaxProtocol,
         in context: some MacroExpansionContext
-    ) throws -> [ExtensionDeclSyntax] {
+    ) throws -> [DeclSyntax] {
+        guard let controller = ControllerDeclaration(declaration) else { return [] }
         let prefix = firstStringLiteral(node.arguments) ?? ""
-        let access = accessModifier(declaration.modifiers)
+        let access = controller.access
         // Controller-scope `@Middleware` wraps every route, outer to each route's own middleware.
-        let controllerMiddleware = middlewareConstructions(from: declaration.attributes)
+        let controllerMiddleware = middlewareConstructions(from: controller.attributes)
 
         var routeBlocks: [String] = []
-        for member in declaration.memberBlock.members {
-            guard let function = member.decl.as(FunctionDeclSyntax.self) else { continue }
+        for function in controller.functions {
             guard let verb = verb(from: function.attributes) else { continue }  // no verb → helper, skip
             // A route that fails validation is diagnosed at its offending node and skipped, so the
             // rest of the controller still generates (no cascade of downstream errors).
@@ -38,10 +44,29 @@ public struct ControllerMacro: ExtensionMacro {
                 routeBlocks.append(block)
             }
         }
-
         let body = routeBlocks.joined(separator: "\n")
-        let ext: DeclSyntax = """
-            extension \(type.trimmed): RouteContributor {
+
+        let proxyName = "_WireRouteContributor_\(controller.name)"
+        let controllerType = controller.selfType
+        // The subject is the proxy's first, unlabelled initialiser parameter — Wire's contributor-proxy
+        // synthesis passes it positionally (it names no member of this type). Factories follow, labelled.
+        var storedFields = ["\(access)let controller: \(controllerType)"]
+        var initParameters = ["_ controller: \(controllerType)"]
+        var assignments = ["self.controller = controller"]
+        for key in consumedFactoryKeys(controller) {
+            let property = factoryPropertyName(forKey: key)
+            let type = factoryTypeName(forKey: key)
+            storedFields.append("\(access)let \(property): \(type)")
+            initParameters.append("\(property): \(type)")
+            assignments.append("self.\(property) = \(property)")
+        }
+
+        let proxy: DeclSyntax = """
+            \(raw: access)struct \(raw: proxyName)\(raw: controller.genericClause): RouteContributor, Sendable\(raw: controller.whereClause) {
+                \(raw: storedFields.joined(separator: "\n    "))
+                \(raw: access)init(\(raw: initParameters.joined(separator: ", "))) {
+                    \(raw: assignments.joined(separator: "\n        "))
+                }
                 \(raw: access)func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
                 where
                     Builder.RequestContext: ~Copyable,
@@ -53,7 +78,28 @@ public struct ControllerMacro: ExtensionMacro {
                 }
             }
             """
-        return [ext.cast(ExtensionDeclSyntax.self)]
+        return [proxy]
+    }
+
+    /// The factory keys the controller consumes across controller- and route-scope `@Middleware(key)`,
+    /// deduped in first-seen order — the proxy stores one factory field per key. `.self` middleware are
+    /// constructed inline in the witness (not lifted), so they contribute no field.
+    private static func consumedFactoryKeys(_ controller: ControllerDeclaration) -> [String] {
+        var keys: [String] = []
+        func collect(_ attributes: AttributeListSyntax) {
+            for case let .attribute(attr) in attributes
+            where attr.attributeName.trimmedDescription == "Middleware" {
+                guard let arguments = attr.arguments?.as(LabeledExprListSyntax.self),
+                    let first = arguments.first
+                else { continue }
+                let expression = first.expression.trimmedDescription
+                guard !expression.hasSuffix(".self") else { continue }  // concrete/generic case — inline
+                if !keys.contains(expression) { keys.append(expression) }
+            }
+        }
+        collect(controller.attributes)
+        for function in controller.functions { collect(function.attributes) }
+        return keys
     }
 
     // MARK: - Per-route codegen
@@ -74,7 +120,7 @@ public struct ControllerMacro: ExtensionMacro {
         guard let (binds, callArgs) = parameterBindings(of: function, path: path, hasBody: hasBody, in: context)
         else { return nil }
         let hasBinds = !binds.isEmpty
-        let call = "try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))"
+        let call = "try await self.controller.\(function.name.text)(\(callArgs.joined(separator: ", ")))"
         guard let response = responseComputation(from: function, call: call, in: context) else { return nil }
         let requestName = hasBinds ? "request" : "_"
         let parametersName = hasBinds ? "pathParameters" : "_"
@@ -167,7 +213,7 @@ public struct ControllerMacro: ExtensionMacro {
             contextName: contextName,
             parametersName: parametersName,
             readerName: readerName,
-            terminalBody: "try await self.\(function.name.text)(\(callArgs.joined(separator: ", ")))"
+            terminalBody: "try await self.controller.\(function.name.text)(\(callArgs.joined(separator: ", ")))"
         )
     }
 
@@ -270,100 +316,77 @@ public struct ControllerMacro: ExtensionMacro {
     }
 }
 
-// MARK: - Member role: factory-lift ivars + wrapping init
+// MARK: - Controller declaration reading
 
-extension ControllerMacro: MemberMacro {
-    /// For each `@Middleware(key)` the controller consumes (controller- or route-scope), lift the
-    /// plugin-synthesised factory onto the controller: add a `_wireFactory_<key>` property and one
-    /// wrapping init that receives it. The property is an **IUO with a default** — `@Singleton`'s own
-    /// generated init can't see it (member macros don't see each other's members), and the default is
-    /// what lets that init still compile; the wrapping init populates it, and the plugin's construction
-    /// call (the controller's `@Inject` deps followed by the appended factory deps) resolves to *this*
-    /// init. Proven in spike-18.
-    public static func expansion(
-        of node: AttributeSyntax,
-        providingMembersOf declaration: some DeclGroupSyntax,
-        conformingTo protocols: [TypeSyntax],
-        in context: some MacroExpansionContext
-    ) throws -> [DeclSyntax] {
-        var keys: [String] = []
-        func collect(_ attributes: AttributeListSyntax) {
-            for case let .attribute(attr) in attributes
-            where attr.attributeName.trimmedDescription == "Middleware" {
-                guard let arguments = attr.arguments?.as(LabeledExprListSyntax.self),
-                    let first = arguments.first
-                else { continue }
-                let expression = first.expression.trimmedDescription
-                guard !expression.hasSuffix(".self") else { continue }  // concrete case — nothing to lift
-                if !keys.contains(expression) { keys.append(expression) }  // dedupe, first-seen order
-            }
+/// The pieces of the annotated controller the proxy needs — normalised across `struct` / `class` /
+/// `actor` hosts, since a `PeerMacro` receives a bare `DeclSyntaxProtocol` rather than the type name and
+/// generics an `ExtensionMacro` gets. `nil` for any declaration that isn't a nominal type.
+private struct ControllerDeclaration {
+    let name: String
+    let genericParameterClause: GenericParameterClauseSyntax?
+    let genericWhereClause: GenericWhereClauseSyntax?
+    let attributes: AttributeListSyntax
+    let modifiers: DeclModifierListSyntax
+    let memberBlock: MemberBlockSyntax
+
+    init?(_ declaration: some DeclSyntaxProtocol) {
+        if let structDecl = declaration.as(StructDeclSyntax.self) {
+            name = structDecl.name.text
+            genericParameterClause = structDecl.genericParameterClause
+            genericWhereClause = structDecl.genericWhereClause
+            attributes = structDecl.attributes
+            modifiers = structDecl.modifiers
+            memberBlock = structDecl.memberBlock
+        } else if let classDecl = declaration.as(ClassDeclSyntax.self) {
+            name = classDecl.name.text
+            genericParameterClause = classDecl.genericParameterClause
+            genericWhereClause = classDecl.genericWhereClause
+            attributes = classDecl.attributes
+            modifiers = classDecl.modifiers
+            memberBlock = classDecl.memberBlock
+        } else if let actorDecl = declaration.as(ActorDeclSyntax.self) {
+            name = actorDecl.name.text
+            genericParameterClause = actorDecl.genericParameterClause
+            genericWhereClause = actorDecl.genericWhereClause
+            attributes = actorDecl.attributes
+            modifiers = actorDecl.modifiers
+            memberBlock = actorDecl.memberBlock
+        } else {
+            return nil
         }
-        collect(declaration.attributes)
-        for member in declaration.memberBlock.members {
-            if let function = member.decl.as(FunctionDeclSyntax.self) {
-                collect(function.attributes)
-            }
-        }
-        guard !keys.isEmpty else { return [] }
-
-        let dependencies = injectInitDependencies(in: declaration)
-        let access = accessModifier(declaration.modifiers)
-
-        var members: [DeclSyntax] = []
-        for key in keys {
-            members.append(
-                "var \(raw: factoryPropertyName(forKey: key)): \(raw: factoryTypeName(forKey: key))! = nil"
-            )
-        }
-
-        let parameters =
-            (dependencies.map { "\($0.name): \($0.type)" }
-            + keys.map { "\(factoryPropertyName(forKey: $0)): \(factoryTypeName(forKey: $0))" })
-            .joined(separator: ", ")
-        let assignments =
-            (dependencies.map { "    self.\($0.name) = \($0.name)" }
-            + keys.map { "    self.\(factoryPropertyName(forKey: $0)) = \(factoryPropertyName(forKey: $0))" })
-            .joined(separator: "\n")
-        members.append(
-            """
-            \(raw: access)init(\(raw: parameters)) {
-            \(raw: assignments)
-            }
-            """
-        )
-        return members
     }
 
-    /// The controller's `@Inject` init-time dependencies in declaration order — the leading parameters
-    /// of the wrapping init, matching what the plugin emits before the appended factory deps. Mirrors
-    /// swift-wire's rule: non-`weak` `@Inject` stored properties are init parameters; `@Inject weak var`
-    /// is post-construction and excluded. (A user-written `@Inject init` is not handled here — the 3.1
-    /// controller shape is `@Inject` properties.)
-    private static func injectInitDependencies(
-        in declaration: some DeclGroupSyntax
-    ) -> [(name: String, type: String)] {
-        var dependencies: [(name: String, type: String)] = []
-        for member in declaration.memberBlock.members {
-            guard let varDecl = member.decl.as(VariableDeclSyntax.self) else { continue }
-            let hasInject = varDecl.attributes.contains { element in
-                guard let name = element.as(AttributeSyntax.self)?.attributeName.trimmedDescription else {
-                    return false
-                }
-                return name == "Inject" || name == "Wire::Inject"
-            }
-            guard hasInject else { continue }
-            let isStatic = varDecl.modifiers.contains { ["static", "class"].contains($0.name.text) }
-            let isWeak = varDecl.modifiers.contains { $0.name.text == "weak" }
-            let isLet = varDecl.bindingSpecifier.tokenKind == .keyword(.let)
-            guard !isStatic, !(isWeak && !isLet) else { continue }
-            for binding in varDecl.bindings {
-                guard let name = binding.pattern.as(IdentifierPatternSyntax.self)?.identifier.text,
-                    let type = binding.typeAnnotation?.type.trimmedDescription
-                else { continue }
-                dependencies.append((name: name, type: type))
+    var functions: [FunctionDeclSyntax] {
+        memberBlock.members.compactMap { $0.decl.as(FunctionDeclSyntax.self) }
+    }
+
+    /// `"public "` / `"package "` / `""` — the proxy inherits the controller's visibility so the graph
+    /// consumer (another module) can construct it.
+    var access: String {
+        for modifier in modifiers {
+            switch modifier.name.tokenKind {
+            case .keyword(.public), .keyword(.open): return "public "
+            case .keyword(.package): return "package "
+            default: continue
             }
         }
-        return dependencies
+        return ""
+    }
+
+    /// The generic parameter clause verbatim (`"<Repository: TodoRepository>"`) restated on the proxy,
+    /// or `""` for a non-generic controller.
+    var genericClause: String { genericParameterClause?.trimmedDescription ?? "" }
+
+    /// The generic `where` clause verbatim, space-prefixed for splicing after `Sendable`, or `""`.
+    var whereClause: String { genericWhereClause.map { " \($0.trimmedDescription)" } ?? "" }
+
+    /// The controller type the proxy stores — its name applied to its own parameter names
+    /// (`TodosController<Repository>`, so the proxy threads the graph's lift parameter transitively), or
+    /// the bare name for a non-generic controller.
+    var selfType: String {
+        guard let parameters = genericParameterClause?.parameters, !parameters.isEmpty else { return name }
+        let arguments = parameters.map { $0.name.text }.joined(separator: ", ")
+        return "\(name)<\(arguments)>"
     }
 }
 
@@ -603,17 +626,6 @@ extension ControllerMacro {
     private static func firstStringLiteral(_ arguments: AttributeSyntax.Arguments?) -> String? {
         guard case let .argumentList(list) = arguments, let first = list.first else { return nil }
         return first.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
-    }
-
-    private static func accessModifier(_ modifiers: DeclModifierListSyntax) -> String {
-        for modifier in modifiers {
-            switch modifier.name.tokenKind {
-            case .keyword(.public), .keyword(.open): return "public "
-            case .keyword(.package): return "package "
-            default: continue
-            }
-        }
-        return ""
     }
 
     /// Join a controller prefix and a verb subpath into one `{name}`-template path.

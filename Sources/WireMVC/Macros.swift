@@ -6,36 +6,35 @@ public import Wire
 // annotations are markers `@Controller` reads (verbs/responses are no-op peer macros; the param
 // bindings are `@propertyWrapper`s in RequestBinding.swift).
 
-/// Tells Wire that `@Controller` aliases `@Contributes(to: WireMVCKeys.routeContributors)`, so a
-/// controller needs only `@Singleton @Controller` — the plugin collates it without a separate
-/// `@Contributes`.
+/// Tells Wire that `@Controller` contributes a generated **proxy** — `_WireRouteContributor_<Controller>`
+/// — into `WireMVCKeys.routeContributors`, not the controller itself. swift-wire's contributor-proxy
+/// synthesis constructs the proxy (depending on the controller plus any factories its `@Middleware(key)`
+/// use-sites demand) and collates that. So a controller needs only `@Singleton @Controller` and stays a
+/// plain, footgun-free binding — the proxy is the only type that holds the lifted factories.
 public let wireMVCControllerAlias = WireAdapterAnnotationV1(
     annotation: "Controller",
-    capability: .contributes(to: WireMVCKeys.routeContributors)
+    capability: .contributesProxy(to: WireMVCKeys.routeContributors, proxyTypePrefix: "_WireRouteContributor_")
 )
 
 /// `@Middleware(key)` declares that the annotated controller requires the factory synthesised from the
 /// keyed `@Factory` middleware template — the `.injectsFactoryOnArgument` capability. The plugin lifts
-/// the factory onto the controller through the `@Controller` macro's wrapping init. (The `.self` forms
-/// of `@Middleware` are read inline by `@Controller` and constructed there, not factory cases; the
-/// synthesis skips them.)
+/// the factory onto the controller's generated route-contributor proxy (the type that folds the
+/// middleware). (The `.self` forms of `@Middleware` are read inline by `@Controller` and constructed
+/// there, not factory cases; the synthesis skips them.)
 public let wireMVCMiddlewareFactoryAlias = WireAdapterAnnotationV1(
     annotation: "Middleware",
     capability: .injectsFactoryOnArgument
 )
 
-/// Generates a `RouteContributor` conformance registering each `@Get`/`@Post`/… route onto a
+/// Generates a `RouteContributor` proxy registering each `@Get`/`@Post`/… route onto a
 /// `some RoutableHTTPServerBuilder`, under the optional path prefix. `@Singleton @Controller("/users")`
 /// is all an app-scoped controller needs.
-@attached(member, names: named(init), arbitrary)
-@attached(extension, conformances: RouteContributor, names: named(registerWireRoutes(on:)))
+@attached(peer, names: prefixed(_WireRouteContributor_))
 public macro Controller(_ path: String) =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 
-/// Generates the `RouteContributor` conformance with no path prefix (routes carry the full path on
-/// their verb annotation).
-@attached(member, names: named(init), arbitrary)
-@attached(extension, conformances: RouteContributor, names: named(registerWireRoutes(on:)))
+/// Generates the proxy with no path prefix (routes carry the full path on their verb annotation).
+@attached(peer, names: prefixed(_WireRouteContributor_))
 public macro Controller() =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 
