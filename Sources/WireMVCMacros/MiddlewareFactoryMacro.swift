@@ -1,6 +1,7 @@
 import SwiftDiagnostics
 import SwiftSyntax
 import SwiftSyntaxMacros
+import WireMVCCodegen
 
 /// Backs `@MiddlewareFactory`. Like the verb markers it expands to nothing — the plugin reads the
 /// attribute (and its role list) off the type via the `wireMVCMiddlewareFactoryRolesAlias`. Its one job
