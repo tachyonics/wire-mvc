@@ -61,14 +61,35 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-syntax", branch: "release/6.4.x"),
     ],
     targets: [
+        // The route codegen — the domain half of a route contributor (verbs, param bindings, response
+        // modes, the middleware fold), shared verbatim by the `@Controller` macro and the
+        // `WireMVCRouteGen` tool so they cannot drift. Plain SwiftSyntax (no macro surface), so both a
+        // compiler-plugin macro and an executable can depend on it.
+        .target(
+            name: "WireMVCCodegen",
+            dependencies: [
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
+                .product(name: "SwiftBasicFormat", package: "swift-syntax"),
+                .product(name: "SwiftDiagnostics", package: "swift-syntax"),
+            ]
+        ),
         .macro(
             name: "WireMVCMacros",
             dependencies: [
+                "WireMVCCodegen",
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftSyntaxMacros", package: "swift-syntax"),
                 .product(name: "SwiftCompilerPlugin", package: "swift-syntax"),
                 .product(name: "SwiftDiagnostics", package: "swift-syntax"),
             ]
+        ),
+        // The WireMVC route-codegen tool (Phase A domain half) — emits `RouteContributor` extensions on
+        // the plugin-emitted structural proxies. A thin CLI over `WireMVCCodegen`; wired into the build
+        // at the A3 cutover.
+        .executableTarget(
+            name: "WireMVCRouteGen",
+            dependencies: ["WireMVCCodegen"]
         ),
         .target(
             name: "WireMVC",
@@ -143,6 +164,14 @@ let package = Package(
             dependencies: [
                 "WireMVCMacros",
                 .product(name: "SwiftSyntaxMacrosTestSupport", package: "swift-syntax"),
+            ]
+        ),
+        .testTarget(
+            name: "WireMVCCodegenTests",
+            dependencies: [
+                "WireMVCCodegen",
+                .product(name: "SwiftSyntax", package: "swift-syntax"),
+                .product(name: "SwiftParser", package: "swift-syntax"),
             ]
         ),
     ]
