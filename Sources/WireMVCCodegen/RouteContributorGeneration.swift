@@ -1,6 +1,6 @@
-public import SwiftSyntax
 import SwiftBasicFormat
 import SwiftParser
+public import SwiftSyntax
 
 // The two output forms the shared route codegen feeds:
 //   • the `@Controller` macro splices `renderRegisterWireRoutesWitness` into its peer *struct* (subject
@@ -90,7 +90,9 @@ public func generateRouteContributors(
         finder.walk(sourceFile)
         for found in finder.controllers {
             let rendered = renderRouteContributorExtension(
-                controller: found.declaration, pathPrefix: found.pathPrefix)
+                controller: found.declaration,
+                pathPrefix: found.pathPrefix
+            )
             extensions.append((found.declaration.name, rendered.source))
             for diagnostic in rendered.diagnostics {
                 located.append(
@@ -150,9 +152,18 @@ private final class ControllerFinder: SyntaxVisitor {
 
     init() { super.init(viewMode: .sourceAccurate) }
 
-    override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind { record(node); return .visitChildren }
-    override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind { record(node); return .visitChildren }
-    override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind { record(node); return .visitChildren }
+    override func visit(_ node: StructDeclSyntax) -> SyntaxVisitorContinueKind {
+        record(node)
+        return .visitChildren
+    }
+    override func visit(_ node: ClassDeclSyntax) -> SyntaxVisitorContinueKind {
+        record(node)
+        return .visitChildren
+    }
+    override func visit(_ node: ActorDeclSyntax) -> SyntaxVisitorContinueKind {
+        record(node)
+        return .visitChildren
+    }
 
     private func record(_ declaration: some DeclSyntaxProtocol & DeclGroupSyntax) {
         guard let controllerAttribute = controllerAttribute(in: declaration.attributes),

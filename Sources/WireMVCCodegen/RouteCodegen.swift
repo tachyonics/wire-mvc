@@ -11,7 +11,8 @@ import SwiftSyntax
 //     `WireMVCRouteGen` tool can resolve their source locations and print compiler-style lines.
 //
 // This is the single source of truth: the macro and the tool both fold their witness body from
-// `RouteBlockGenerator`, so the register/bind/encode logic can't drift between them.
+// `RouteBlockGenerator`, so the register/bind/encode logic can't drift between them. The generator's
+// methods are split across extensions (per concern) to keep any one type body readable.
 
 /// Generates the `builder.register` blocks that make up a route-contributor witness body, accumulating
 /// any route-shape diagnostics. One instance per controller (holds the accumulated diagnostics).
@@ -41,8 +42,6 @@ struct RouteBlockGenerator {
         }
         return blocks.joined(separator: "\n")
     }
-
-    // MARK: - Per-route codegen
 
     private mutating func routeBlock(
         function: FunctionDeclSyntax,
@@ -75,8 +74,12 @@ struct RouteBlockGenerator {
             terminalBody: closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response)
         )
     }
+}
 
-    // MARK: - Raw route codegen
+// MARK: - Raw route codegen
+
+extension RouteBlockGenerator {
+    private enum RawRole { case context, reader, sender }
 
     private func hasRawRoute(_ function: FunctionDeclSyntax) -> Bool {
         for case let .attribute(attr) in function.attributes
@@ -86,12 +89,10 @@ struct RouteBlockGenerator {
         return false
     }
 
-    private enum RawRole { case context, reader, sender }
-
     /// The `@RawRoute` register call: pass the register closure's primitives straight to the handler,
     /// matched by type (`HTTPRequest`, `[String: Substring]`) and by the reader/sender generic
     /// parameters' constraints (`AsyncReader`/`HTTPResponseSender`). No decode, no encode.
-    private mutating func rawRouteBlock(
+    fileprivate mutating func rawRouteBlock(
         function: FunctionDeclSyntax,
         verb: Verb,
         path: String,
@@ -126,7 +127,8 @@ struct RouteBlockGenerator {
             } else {
                 let name = (param.secondName ?? param.firstName).text
                 diagnostics.append(
-                    RouteCodegenDiagnostic(.unsupportedRawParameter(name: name, type: type), at: param))
+                    RouteCodegenDiagnostic(.unsupportedRawParameter(name: name, type: type), at: param)
+                )
                 return nil
             }
             let label = param.firstName.tokenKind == .wildcard ? "" : "\(param.firstName.text): "
@@ -134,7 +136,8 @@ struct RouteBlockGenerator {
         }
         guard usesSender else {
             diagnostics.append(
-                RouteCodegenDiagnostic(.rawRouteMissingSender(function.name.text), at: function.name))
+                RouteCodegenDiagnostic(.rawRouteMissingSender(function.name.text), at: function.name)
+            )
             return nil
         }
         let requestName = usesRequest ? "request" : "_"
@@ -153,15 +156,46 @@ struct RouteBlockGenerator {
         )
     }
 
-    // MARK: - Middleware
+    /// Map each handler generic parameter to a raw role by its constraint — `AsyncReader` → reader,
+    /// `HTTPResponseSender` → sender — so a parameter of that generic type binds to the matching
+    /// register-closure primitive.
+    private func rawGenericRoles(_ function: FunctionDeclSyntax) -> [String: RawRole] {
+        var roles: [String: RawRole] = [:]
+        guard let generics = function.genericParameterClause else { return roles }
+        for parameter in generics.parameters {
+            let constraint = parameter.inheritedType?.trimmedDescription ?? ""
+            if constraint.contains("AsyncReader") {
+                roles[parameter.name.text] = .reader
+            } else if constraint.contains("HTTPResponseSender") {
+                roles[parameter.name.text] = .sender
+            } else if constraint.contains("RequestContext") {
+                roles[parameter.name.text] = .context
+            }
+        }
+        return roles
+    }
 
+    /// Strip leading ownership/transfer specifiers (`consuming sending Sender` → `Sender`) so the base
+    /// type matches a generic-parameter name or a concrete raw-primitive type.
+    private func strippingOwnership(_ type: String) -> String {
+        var base = type
+        for specifier in ["consuming ", "borrowing ", "inout ", "sending ", "__owned ", "__shared "] {
+            while base.hasPrefix(specifier) { base = String(base.dropFirst(specifier.count)) }
+        }
+        return base
+    }
+}
+
+// MARK: - Register call & middleware fold
+
+extension RouteBlockGenerator {
     /// The `builder.register` call, wrapping the terminal in the route's middleware fold when there is
     /// one. `requestName`/`contextName`/`parametersName`/`readerName` name (or `_`) the values the
     /// *terminal* uses. With no middleware they name the register closure's params directly. With
     /// middleware, the register closure binds request/context/reader/sender unconditionally to build the
     /// base box, and the terminal re-binds its values off the folded final box via `withContents` —
     /// path parameters are captured from the register closure (never boxed).
-    private func emitRegister(
+    fileprivate func emitRegister(
         verb: Verb,
         path: String,
         middleware: [String],
@@ -207,7 +241,7 @@ struct RouteBlockGenerator {
     ///   Builder.Reader.self, Builder.ResponseSender.self)` — the generic-with-deps factory case. The
     ///   plugin synthesises `_WireFactory_<key>` and lifts it onto the proxy (the member role adds the
     ///   property); the fold calls its `create`, specialised at the builder's box associated types.
-    private func middlewareConstructions(from attributes: AttributeListSyntax) -> [String] {
+    func middlewareConstructions(from attributes: AttributeListSyntax) -> [String] {
         var constructions: [String] = []
         for case let .attribute(attr) in attributes
         where attr.attributeName.trimmedDescription == "Middleware" {
@@ -233,41 +267,14 @@ struct RouteBlockGenerator {
         }
         return constructions
     }
+}
 
-    // MARK: - Parameter binding & response
+// MARK: - Parameter binding & response
 
-    /// Strip leading ownership/transfer specifiers (`consuming sending Sender` → `Sender`) so the base
-    /// type matches a generic-parameter name or a concrete raw-primitive type.
-    private func strippingOwnership(_ type: String) -> String {
-        var base = type
-        for specifier in ["consuming ", "borrowing ", "inout ", "sending ", "__owned ", "__shared "] {
-            while base.hasPrefix(specifier) { base = String(base.dropFirst(specifier.count)) }
-        }
-        return base
-    }
-
-    /// Map each handler generic parameter to a raw role by its constraint — `AsyncReader` → reader,
-    /// `HTTPResponseSender` → sender — so a parameter of that generic type binds to the matching
-    /// register-closure primitive.
-    private func rawGenericRoles(_ function: FunctionDeclSyntax) -> [String: RawRole] {
-        var roles: [String: RawRole] = [:]
-        guard let generics = function.genericParameterClause else { return roles }
-        for parameter in generics.parameters {
-            let constraint = parameter.inheritedType?.trimmedDescription ?? ""
-            if constraint.contains("AsyncReader") {
-                roles[parameter.name.text] = .reader
-            } else if constraint.contains("HTTPResponseSender") {
-                roles[parameter.name.text] = .sender
-            } else if constraint.contains("RequestContext") {
-                roles[parameter.name.text] = .context
-            }
-        }
-        return roles
-    }
-
+extension RouteBlockGenerator {
     /// The `let <name> = try await <Binding><<Type>>.bind(...)` lines and the handler call argument
     /// list, one entry per handler parameter.
-    private mutating func parameterBindings(
+    fileprivate mutating func parameterBindings(
         of function: FunctionDeclSyntax,
         path: String,
         hasBody: Bool
@@ -286,7 +293,8 @@ struct RouteBlockGenerator {
             // ever fail at runtime (`missingPathParameter`), so reject it at the seam.
             if binding.wrapper == "Path", !path.contains("{\(bindingName)}") {
                 diagnostics.append(
-                    RouteCodegenDiagnostic(.pathPlaceholderMissing(name: bindingName, path: path), at: param))
+                    RouteCodegenDiagnostic(.pathPlaceholderMissing(name: bindingName, path: path), at: param)
+                )
                 return nil
             }
             binds.append(
@@ -322,7 +330,7 @@ struct RouteBlockGenerator {
     /// The statement that assigns `wireMVCOutcome`: a JSON body (`@JSONResponse`) or a bare status
     /// (`@ResponseStatus`, after calling the handler for its effect). One response annotation is
     /// required.
-    private mutating func responseComputation(from function: FunctionDeclSyntax, call: String) -> String? {
+    fileprivate mutating func responseComputation(from function: FunctionDeclSyntax, call: String) -> String? {
         let attributes = function.attributes
         let route = function.name.text
         let returnsValue = functionReturnsValue(function)
@@ -354,7 +362,7 @@ struct RouteBlockGenerator {
 
     /// The registration closure body. Compute the outcome — collecting the body first when a
     /// `@JSONBody` is present, mapping a `WireMVCBindingError` to its status — then send it once.
-    private func closureBody(hasBinds: Bool, hasBody: Bool, binds: [String], response: String) -> String {
+    fileprivate func closureBody(hasBinds: Bool, hasBody: Bool, binds: [String], response: String) -> String {
         guard hasBinds else {
             return """
                 let wireMVCOutcome: WireMVCOutcome
@@ -375,7 +383,7 @@ struct RouteBlockGenerator {
             """
     }
 
-    private func routeHasBody(_ function: FunctionDeclSyntax) -> Bool {
+    fileprivate func routeHasBody(_ function: FunctionDeclSyntax) -> Bool {
         for param in function.signature.parameterClause.parameters {
             if let binding = binding(from: param.attributes), binding.wrapper == "JSONBody" {
                 return true
@@ -383,10 +391,12 @@ struct RouteBlockGenerator {
         }
         return false
     }
+}
 
-    // MARK: - Attribute reading
+// MARK: - Attribute reading
 
-    private struct Verb {
+extension RouteBlockGenerator {
+    fileprivate struct Verb {
         let method: String  // e.g. ".get"
         let path: String?
     }
@@ -407,7 +417,7 @@ struct RouteBlockGenerator {
         }
     }
 
-    private func verb(from attributes: AttributeListSyntax) -> Verb? {
+    fileprivate func verb(from attributes: AttributeListSyntax) -> Verb? {
         for case let .attribute(attr) in attributes {
             let name = attr.attributeName.trimmedDescription
             if let method = verbMethod(for: name) {
@@ -417,12 +427,10 @@ struct RouteBlockGenerator {
         return nil
     }
 
-    private let bindingWrappers: Set<String> = ["Path", "Query", "JSONBody", "Header"]
-
     private func binding(from attributes: AttributeListSyntax) -> Binding? {
         for case let .attribute(attr) in attributes {
             let name = attr.attributeName.trimmedDescription
-            if bindingWrappers.contains(name) {
+            if routeBindingWrappers.contains(name) {
                 return Binding(wrapper: name, name: firstStringLiteral(attr.arguments))
             }
         }
@@ -462,6 +470,10 @@ struct RouteBlockGenerator {
         return joined.isEmpty ? "/" : joined
     }
 }
+
+/// The binding-wrapper attribute names a handler parameter can carry. File-scope (not a stored property)
+/// so the generator's methods can live in extensions.
+private let routeBindingWrappers: Set<String> = ["Path", "Query", "JSONBody", "Header"]
 
 // MARK: - Factory-lift naming (structural ↔ domain handshake)
 

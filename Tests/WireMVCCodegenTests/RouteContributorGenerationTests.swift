@@ -29,7 +29,10 @@ struct RouteContributorGenerationTests {
 
     private func witnessBody(_ source: String, pathPrefix: String, subjectAccessor: String) -> String {
         renderRegisterWireRoutesWitness(
-            access: "", controller: controller(source), pathPrefix: pathPrefix, subjectAccessor: subjectAccessor
+            access: "",
+            controller: controller(source),
+            pathPrefix: pathPrefix,
+            subjectAccessor: subjectAccessor
         ).witness
     }
 
@@ -183,8 +186,16 @@ struct RouteContributorGenerationTests {
             """
         let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/x")
         // Controller-outer, route-inner, both re-spelt over the builder's associated types.
-        #expect(rendered.source.contains("ControllerMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()"))
-        #expect(rendered.source.contains("RouteMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()"))
+        #expect(
+            rendered.source.contains(
+                "ControllerMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()"
+            )
+        )
+        #expect(
+            rendered.source.contains(
+                "RouteMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()"
+            )
+        )
         let controllerIndex = rendered.source.range(of: "ControllerMiddleware<Builder")
         let routeIndex = rendered.source.range(of: "RouteMiddleware<Builder")
         #expect(controllerIndex != nil && routeIndex != nil)
@@ -206,7 +217,11 @@ struct RouteContributorGenerationTests {
             """
         let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/users")
         #expect(rendered.diagnostics.isEmpty)
-        #expect(rendered.source.contains("builder.register(method: .get, path: \"/users/events\") { _, _, _, _, responseSender in"))
+        #expect(
+            rendered.source.contains(
+                "builder.register(method: .get, path: \"/users/events\") { _, _, _, _, responseSender in"
+            )
+        )
         #expect(rendered.source.contains("try await self._wireSubject.events(responseSender: responseSender)"))
     }
 

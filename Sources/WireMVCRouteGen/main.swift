@@ -16,7 +16,8 @@ import WireMVCCodegen
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
     FileHandle.standardError.write(
-        Data("usage: WireMVCRouteGen <output-path> <source-files...>\n".utf8))
+        Data("usage: WireMVCRouteGen <output-path> <source-files...>\n".utf8)
+    )
     exit(1)
 }
 let outputPath = arguments[1]
