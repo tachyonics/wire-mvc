@@ -12,6 +12,7 @@ import WireMVC
 @Controller("/users")
 @Middleware(RequestLogMiddleware<WireContext, WireReader, WireSender>.self)  // controller-scope, generic dep-free
 @Middleware(SessionMiddlewareKeys.factory)  // controller-scope, generic-with-deps (factory-lifted by key)
+@Middleware(AuditMiddlewareKeys.factory)  // controller-scope, generic-with-deps, non-canonical parameter order
 struct UsersController: Sendable {
     @Inject var store: UserStore
 

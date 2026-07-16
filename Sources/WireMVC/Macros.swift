@@ -100,3 +100,33 @@ public macro Middleware<T>(_ type: T.Type) =
 @attached(peer)
 public macro Middleware(_ key: FactoryKey) =
     #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
+// ── Generic-with-deps middleware: the producer side (`@Factory` + `@MiddlewareFactory`) ──
+
+/// The box roles a generic middleware's assisted parameters fill, in the proposal box's canonical order
+/// (`RequestResponseMiddlewareBox<RequestContext, Reader, ResponseSender>`). Referenced in a
+/// `@MiddlewareFactory(.role, …)` custom mapping.
+public enum MiddlewareRole: Sendable {
+    case requestContext
+    case reader
+    case responseSender
+}
+
+/// Supplies the **box-role mapping** for a generic middleware's `@Factory` template — which of its
+/// assisted (non-`@Inject`) generic parameters fill which box role. Bare `@MiddlewareFactory` maps them
+/// positionally to `RequestContext`, `Reader`, `ResponseSender` in order (the common
+/// `<Ctx, Reader, Sender>` case); `@MiddlewareFactory(.requestContext, .responseSender)` maps them by the
+/// listed roles (positional over the assisted parameters — for a middleware that reorders or pins one
+/// role). The plugin reads it (via `wireMVCMiddlewareFactoryRolesAlias`) and orders the synthesised
+/// `create`. It requires `@Factory` on the same type — that's the factory template it maps.
+@attached(peer)
+public macro MiddlewareFactory(_ roles: MiddlewareRole...) =
+    #externalMacro(module: "WireMVCMacros", type: "MiddlewareFactoryMacro")
+
+/// Tells Wire that `@MiddlewareFactory` supplies a factory role mapping over the box roles, in the
+/// proposal box's canonical order. The roles stay WireMVC's; the plugin reads them as opaque ordered
+/// slot identifiers naming the synthesised `create`'s generic parameters.
+public let wireMVCMiddlewareFactoryRolesAlias = WireAdapterAnnotationV1(
+    annotation: "MiddlewareFactory",
+    capability: .mapsFactoryRoles(roles: ["RequestContext", "Reader", "ResponseSender"])
+)

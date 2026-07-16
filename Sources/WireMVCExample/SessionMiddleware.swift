@@ -19,6 +19,7 @@ enum SessionMiddlewareKeys {
 /// synthesises `_WireFactory_SessionMiddlewareKeys_factory` and lifts it onto the controller. Model B,
 /// non-transforming: it reads a session via the injected store and passes the box through.
 @Factory(SessionMiddlewareKeys.factory)
+@MiddlewareFactory  // bare → positional: <Ctx, Reader, Sender> map to the roles in order (canonical)
 struct SessionMiddleware<
     Ctx: HTTPServerCapability.RequestContext & ~Copyable,
     Reader: AsyncReader & ~Copyable,

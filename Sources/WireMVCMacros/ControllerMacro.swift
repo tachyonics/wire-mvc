@@ -648,6 +648,7 @@ enum WireMVCDiagnostic: DiagnosticMessage {
     case unsupportedRawParameter(name: String, type: String)
     case rawRouteMissingSender(String)
     case middlewareBindingKeyUnsupported
+    case middlewareFactoryRequiresFactory
 
     var message: String {
         switch self {
@@ -667,6 +668,8 @@ enum WireMVCDiagnostic: DiagnosticMessage {
             "@RawRoute handler '\(route)' must take the response sender (a parameter generic over HTTPResponseSender) to write its response"
         case .middlewareBindingKeyUnsupported:
             "@Middleware currently takes a middleware type — 'SomeMiddleware.self' (concrete) or 'SomeMiddleware<WireContext, WireReader, WireSender>.self' (generic); referencing a graph binding by key is not yet supported"
+        case .middlewareFactoryRequiresFactory:
+            "@MiddlewareFactory requires @Factory on the same type — it supplies the box-role mapping for a factory template. Add @Factory(key) to make this a Wire factory template."
         }
     }
 
@@ -683,6 +686,7 @@ enum WireMVCDiagnostic: DiagnosticMessage {
         case .unsupportedRawParameter: id = "unsupportedRawParameter"
         case .rawRouteMissingSender: id = "rawRouteMissingSender"
         case .middlewareBindingKeyUnsupported: id = "middlewareBindingKeyUnsupported"
+        case .middlewareFactoryRequiresFactory: id = "middlewareFactoryRequiresFactory"
         }
         return MessageID(domain: "WireMVC", id: id)
     }
