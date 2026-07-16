@@ -198,6 +198,15 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         "@Middleware  → controller-scope middleware ran around every route (probe counted \(observedRequests))"
     )
 
+    // @Middleware(AuditMiddlewareKeys.factory) — a generic-with-deps middleware with non-canonical
+    // parameter order (<Sender, Reader, Ctx>), mapped by @MiddlewareFactory(.responseSender, .reader,
+    // .requestContext). That it ran proves the role-ordered create folded correctly.
+    let observedAudits = auditProbe.load(ordering: .relaxed)
+    check(
+        observedAudits > 0,
+        "@MiddlewareFactory  → reordered generic-with-deps middleware folded and ran (probe counted \(observedAudits))"
+    )
+
     group.cancelAll()
     if !failed.isEmpty { throw ExampleFailed(failures: failed) }
 }
