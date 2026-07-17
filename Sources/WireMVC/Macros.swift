@@ -26,15 +26,17 @@ public let wireMVCMiddlewareFactoryAlias = WireAdapterAnnotationV1(
     capability: .injectsFactoryOnArgument
 )
 
-/// Generates a `RouteContributor` proxy registering each `@Get`/`@Post`/… route onto a
-/// `some RoutableHTTPServerBuilder`, under the optional path prefix. `@Singleton @Controller("/users")`
-/// is all an app-scoped controller needs.
-@attached(peer, names: prefixed(_WireRouteContributor_))
+/// Marks a controller: each `@Get`/`@Post`/… route is registered onto a `some RoutableHTTPServerBuilder`
+/// under the optional path prefix. `@Singleton @Controller("/users")` is all an app-scoped controller
+/// needs. A **marker** (Phase A) — it expands to nothing; the route-contributor proxy is generated in
+/// the consumer module under plugin orchestration (WireGen emits the struct, `WireMVCRouteGen` the
+/// witness). WireGen reads `@Controller` as the proxy-contribution directive via `wireMVCControllerAlias`.
+@attached(peer)
 public macro Controller(_ path: String) =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 
-/// Generates the proxy with no path prefix (routes carry the full path on their verb annotation).
-@attached(peer, names: prefixed(_WireRouteContributor_))
+/// The no-path-prefix form (routes carry the full path on their verb annotation).
+@attached(peer)
 public macro Controller() =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 

@@ -36,6 +36,9 @@ let package = Package(
     products: [
         .library(name: "WireMVC", targets: ["WireMVC"]),
         .library(name: "WireMVCServerTransport", targets: ["WireMVCServerTransport"]),
+        // The adapter-owned build plugin a WireMVC consumer applies (instead of swift-wire's
+        // WireBuildPlugin) — it runs WireGen + WireMVCRouteGen, emitting the proxy structs + witnesses.
+        .plugin(name: "WireMVCBuildPlugin", targets: ["WireMVCBuildPlugin"]),
     ],
     traits: [
         // Opt-in ServerTransport (swift-openapi-runtime) compatibility. Off by default, so the core
@@ -91,6 +94,15 @@ let package = Package(
             name: "WireMVCRouteGen",
             dependencies: ["WireMVCCodegen"]
         ),
+        // The adapter-owned build plugin — runs WireGen (swift-wire) + WireMVCRouteGen (this package).
+        .plugin(
+            name: "WireMVCBuildPlugin",
+            capability: .buildTool(),
+            dependencies: [
+                "WireMVCRouteGen",
+                .product(name: "WireGen", package: "swift-wire"),
+            ]
+        ),
         .target(
             name: "WireMVC",
             dependencies: [
@@ -125,7 +137,7 @@ let package = Package(
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ],
             swiftSettings: proposalSettings,
-            plugins: [.plugin(name: "WireBuildPlugin", package: "swift-wire")]
+            plugins: [.plugin(name: "WireMVCBuildPlugin")]
         ),
         // Opt-in ServerTransport adapter — gated on the `ServerTransport` trait, so OpenAPIRuntime is
         // pruned from resolution unless a consumer enables it. Its sources are `#if ServerTransport`,
