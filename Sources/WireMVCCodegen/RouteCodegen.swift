@@ -20,6 +20,10 @@ struct RouteBlockGenerator {
     /// The field the witness calls the controller through — `controller` (macro peer struct) or
     /// `_wireSubject` (plugin-emitted structural proxy).
     let subjectAccessor: String
+    /// The `@Factory` template keys visible across the input sources — how a non-`.self`
+    /// `@Middleware(X)` argument is classified: a key in this set is a factory (its `create` is called
+    /// on the lifted `_wireFactory_<key>`); any other key is a graph binding (referenced as `_wire<key>`).
+    let factoryKeys: Set<String>
     private(set) var diagnostics: [RouteCodegenDiagnostic] = []
 
     /// The joined `builder.register` blocks for every verb-annotated function on the controller — the
@@ -212,8 +216,9 @@ extension RouteBlockGenerator {
                 }
                 """
         }
-        // `middleware` holds each fold entry's complete construction expression (concrete `C()` or
-        // generic `G<Builder.RequestContext, …>()`), computed by `middlewareConstructions`.
+        // `middleware` holds each fold entry's expression — a graph binding read off the proxy
+        // (`self._wire<Type>` / `self._wire<key>`) or a lifted factory's `create` call — computed by
+        // `middlewareConstructions`.
         let fold = middleware.joined(separator: "\n")
         return """
             builder.register(method: \(verb.method), path: "\(path)") { request, requestContext, \(parametersName), reader, responseSender in
@@ -230,17 +235,17 @@ extension RouteBlockGenerator {
             """
     }
 
-    /// The fold-entry construction expression for each `@Middleware(...)`, in written order. The
-    /// dispatch on the argument syntax:
-    /// - `Concrete.self` (no generic args) → `Concrete()` — a concrete middleware (fits only downstream
-    ///   of an erasing middleware, where the box is concrete; a misplacement is a compiler type error).
-    /// - `Generic<…>.self` (generic args) → `Generic<Builder.RequestContext, Builder.Reader,
-    ///   Builder.ResponseSender>()` — the written type args are WireMVC placeholders discarded, re-spelt
-    ///   over the builder's associated types (inference doesn't flow through the fold).
-    /// - a key reference (not `.self`) → `self._wireFactory_<key>.create(Builder.RequestContext.self,
-    ///   Builder.Reader.self, Builder.ResponseSender.self)` — the generic-with-deps factory case. The
-    ///   plugin synthesises `_WireFactory_<key>` and lifts it onto the proxy (the member role adds the
-    ///   property); the fold calls its `create`, specialised at the builder's box associated types.
+    /// The fold-entry expression for each `@Middleware(...)`, in written order. Every middleware is read
+    /// from the graph, off the proxy field the plugin lifts it onto — never constructed inline. The
+    /// dispatch on the argument:
+    /// - `T.self` → `self._wire<T>` — the middleware is a graph binding, injected by type. The plugin's
+    ///   `.injectsFromGraph` pass gives the proxy a `_wire<T>` field holding that binding.
+    /// - a key that names a `@Factory` template (`factoryKeys`) → `self._wireFactory_<key>.create(
+    ///   Builder.RequestContext.self, Builder.Reader.self, Builder.ResponseSender.self)` — the
+    ///   generic-with-deps factory case. The plugin synthesises `_WireFactory_<key>` and lifts it onto the
+    ///   proxy; the fold calls its `create`, specialised at the builder's box associated types.
+    /// - any other key → `self._wire<key>` — a keyed graph binding, injected by the same
+    ///   `.injectsFromGraph` pass under the sanitised-key field name.
     func middlewareConstructions(from attributes: AttributeListSyntax) -> [String] {
         var constructions: [String] = []
         for case let .attribute(attr) in attributes
@@ -250,19 +255,16 @@ extension RouteBlockGenerator {
                 let first = arguments.first
             else { continue }
             let expression = first.expression.trimmedDescription
-            guard expression.hasSuffix(".self") else {
+            if expression.hasSuffix(".self") {
+                let type = String(expression.dropLast(".self".count))
+                constructions.append("self.\(dependencyPropertyName(forType: type))")
+            } else if factoryKeys.contains(expression) {
                 let property = factoryPropertyName(forKey: expression)
                 constructions.append(
                     "self.\(property).create(Builder.RequestContext.self, Builder.Reader.self, Builder.ResponseSender.self)"
                 )
-                continue
-            }
-            let typeSpelling = String(expression.dropLast(".self".count))
-            if let angle = typeSpelling.firstIndex(of: "<") {
-                let name = typeSpelling[..<angle]
-                constructions.append("\(name)<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()")
             } else {
-                constructions.append("\(typeSpelling)()")
+                constructions.append("self.\(dependencyPropertyName(forKey: expression))")
             }
         }
         return constructions
@@ -487,23 +489,17 @@ public func sanitizedKeyFragment(_ key: String) -> String {
 public func factoryPropertyName(forKey key: String) -> String { "_wireFactory_" + sanitizedKeyFragment(key) }
 public func factoryTypeName(forKey key: String) -> String { "_WireFactory_" + sanitizedKeyFragment(key) }
 
-/// The factory keys the controller consumes across controller- and route-scope `@Middleware(key)`,
-/// deduped in first-seen order — the proxy stores one factory field per key. `.self` middleware are
-/// constructed inline in the witness (not lifted), so they contribute no field.
-public func consumedFactoryKeys(_ controller: ControllerDeclaration) -> [String] {
-    var keys: [String] = []
-    func collect(_ attributes: AttributeListSyntax) {
-        for case let .attribute(attr) in attributes
-        where attr.attributeName.trimmedDescription == "Middleware" {
-            guard let arguments = attr.arguments?.as(LabeledExprListSyntax.self),
-                let first = arguments.first
-            else { continue }
-            let expression = first.expression.trimmedDescription
-            guard !expression.hasSuffix(".self") else { continue }  // concrete/generic case — inline
-            if !keys.contains(expression) { keys.append(expression) }
-        }
-    }
-    collect(controller.attributes)
-    for function in controller.functions { collect(function.attributes) }
-    return keys
+/// The proxy field an `@Middleware(T.self)` binding is read through — the same name swift-wire's
+/// adapter-dependency pass gives the by-type injected field: `_wire` + the simple (generics- and
+/// namespace-stripped) type name, upper-cameled (`Mod.RequireAdmin<…>` → `_wireRequireAdmin`). Both
+/// sides derive it identically so the witness and the plugin-emitted struct meet on the field.
+public func dependencyPropertyName(forType type: String) -> String {
+    let withoutGenerics = type.prefix { $0 != "<" }
+    let simple = withoutGenerics.split(separator: ".").last.map(String.init) ?? String(withoutGenerics)
+    return "_wire" + simple.prefix(1).uppercased() + simple.dropFirst()
 }
+
+/// The proxy field an `@Middleware(key)` binding is read through when `key` is a graph binding key (not
+/// a `@Factory` template) — `_wire` + the sanitised key, matching swift-wire's keyed adapter-dependency
+/// field name.
+public func dependencyPropertyName(forKey key: String) -> String { "_wire" + sanitizedKeyFragment(key) }

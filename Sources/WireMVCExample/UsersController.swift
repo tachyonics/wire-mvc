@@ -10,7 +10,7 @@ import WireMVC
 // `Wire.bootstrap()` + `WireMVC.router` register its routes onto the server.
 @Singleton
 @Controller("/users")
-@Middleware(RequestLogMiddleware<WireContext, WireReader, WireSender>.self)  // controller-scope, generic dep-free
+@Middleware(RequestLogMiddlewareKeys.factory)  // controller-scope, generic dep-free
 @Middleware(SessionMiddlewareKeys.factory)  // controller-scope, generic-with-deps (factory-lifted by key)
 @Middleware(AuditMiddlewareKeys.factory)  // controller-scope, generic-with-deps, non-canonical parameter order
 struct UsersController: Sendable {
@@ -30,7 +30,7 @@ struct UsersController: Sendable {
 
     @Delete("/{id}")
     @ResponseStatus(.noContent)
-    @Middleware(RequireAdmin<WireContext, WireReader, WireSender>.self)  // route-scope gate
+    @Middleware(RequireAdminKeys.factory)  // route-scope gate
     func delete(@Path id: String) async throws {
         store.delete(id)
     }

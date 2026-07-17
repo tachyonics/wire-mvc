@@ -23,14 +23,16 @@ private let witnessSignature = """
 
 /// The full `RouteContributor` witness method — access + signature + `where` clause + `{ body }` — for
 /// one controller, plus any route-shape diagnostics. `access` is the `"public "`/`"package "`/`""`
-/// keyword prefix; `subjectAccessor` is the stored field the body calls the controller through.
+/// keyword prefix; `subjectAccessor` is the stored field the body calls the controller through;
+/// `factoryKeys` are the `@Factory` template keys the middleware fold classifies against.
 public func renderRegisterWireRoutesWitness(
     access: String,
     controller: ControllerDeclaration,
     pathPrefix: String,
-    subjectAccessor: String
+    subjectAccessor: String,
+    factoryKeys: Set<String>
 ) -> (witness: String, diagnostics: [RouteCodegenDiagnostic]) {
-    var generator = RouteBlockGenerator(subjectAccessor: subjectAccessor)
+    var generator = RouteBlockGenerator(subjectAccessor: subjectAccessor, factoryKeys: factoryKeys)
     let body = generator.routeBlocks(of: controller, pathPrefix: pathPrefix)
     let witness = """
         \(access)func \(witnessSignature)
@@ -48,13 +50,15 @@ public func renderRegisterWireRoutesWitness(
 /// the generated file reads cleanly.
 public func renderRouteContributorExtension(
     controller: ControllerDeclaration,
-    pathPrefix: String
+    pathPrefix: String,
+    factoryKeys: Set<String>
 ) -> (source: String, diagnostics: [RouteCodegenDiagnostic]) {
     let rendered = renderRegisterWireRoutesWitness(
         access: controller.access,
         controller: controller,
         pathPrefix: pathPrefix,
-        subjectAccessor: contributorProxySubjectAccessor
+        subjectAccessor: contributorProxySubjectAccessor,
+        factoryKeys: factoryKeys
     )
     let raw = """
         extension \(controller.proxyTypeName): RouteContributor {
@@ -81,17 +85,27 @@ public func generateRouteContributors(
     var located: [LocatedRouteDiagnostic] = []
     var imports: Set<String> = ["import WireMVC"]
 
-    for file in files {
-        let sourceFile = Parser.parse(source: file.source)
-        let converter = SourceLocationConverter(fileName: file.path, tree: sourceFile)
-        imports.formUnion(importDeclarations(of: sourceFile))
+    // Parse every source once, collecting its imports and its `@Factory` template keys — a controller in
+    // one file may reference a factory declared in another, so the full key set must be known before any
+    // witness is folded (it classifies each `@Middleware(key)` as factory-vs-graph-binding).
+    let parsed = files.map { file -> (path: String, tree: SourceFileSyntax) in
+        (file.path, Parser.parse(source: file.source))
+    }
+    var factoryKeys: Set<String> = []
+    for file in parsed {
+        imports.formUnion(importDeclarations(of: file.tree))
+        factoryKeys.formUnion(factoryTemplateKeys(in: file.tree))
+    }
 
+    for file in parsed {
+        let converter = SourceLocationConverter(fileName: file.path, tree: file.tree)
         let finder = ControllerFinder()
-        finder.walk(sourceFile)
+        finder.walk(file.tree)
         for found in finder.controllers {
             let rendered = renderRouteContributorExtension(
                 controller: found.declaration,
-                pathPrefix: found.pathPrefix
+                pathPrefix: found.pathPrefix,
+                factoryKeys: factoryKeys
             )
             extensions.append((found.declaration.name, rendered.source))
             for diagnostic in rendered.diagnostics {
@@ -137,6 +151,32 @@ private func formatted(_ raw: String) -> String {
 private func importDeclarations(of sourceFile: SourceFileSyntax) -> [String] {
     sourceFile.statements.compactMap { statement in
         statement.item.as(ImportDeclSyntax.self)?.trimmedDescription
+    }
+}
+
+/// The canonical key text of every `@Factory(key)` template declared in a parsed file — the set a
+/// middleware fold classifies its `@Middleware(key)` arguments against (a match is a factory; anything
+/// else is a graph binding). Walks the whole tree, since a factory template can be nested in an
+/// enclosing type.
+private func factoryTemplateKeys(in sourceFile: SourceFileSyntax) -> Set<String> {
+    let finder = FactoryKeyFinder()
+    finder.walk(sourceFile)
+    return finder.keys
+}
+
+/// Walks a parsed file for every `@Factory(key)` attribute, capturing its key argument's canonical text.
+private final class FactoryKeyFinder: SyntaxVisitor {
+    private(set) var keys: Set<String> = []
+
+    init() { super.init(viewMode: .sourceAccurate) }
+
+    override func visit(_ node: AttributeSyntax) -> SyntaxVisitorContinueKind {
+        guard node.attributeName.trimmedDescription == "Factory",
+            case let .argumentList(list) = node.arguments,
+            let first = list.first
+        else { return .visitChildren }
+        keys.insert(first.expression.trimmedDescription)
+        return .visitChildren
     }
 }
 
