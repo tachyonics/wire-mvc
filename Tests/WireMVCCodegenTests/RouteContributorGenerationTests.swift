@@ -5,13 +5,13 @@ import Testing
 
 @testable import WireMVCCodegen
 
-/// Phase A, A2 — the domain half of a route contributor. The `WireMVCRouteGen` tool (via `WireMVCCodegen`)
-/// emits the `RouteContributor` witness as an `extension` on the plugin-emitted structural proxy, folding
-/// the *same* route codegen the `@Controller` macro uses (verbs, `@Path`/… bindings, response modes,
-/// `@RawRoute`, the `~Copyable` middleware fold) — so the two cannot drift. These tests pin the emitted
-/// extension for every route shape and the diagnostics, and assert the witness matches the macro's
-/// (differing only by the subject accessor `_wireSubject` vs `controller`).
-@Suite("Route-contributor generation (A2)")
+/// The domain half of a route contributor: the `WireMVCRouteGen` tool (via `WireMVCCodegen`) emits the
+/// `RouteContributor` witness as an `extension` on the plugin-emitted structural proxy, folding the route
+/// codegen (verbs, `@Path`/… bindings, response modes, `@RawRoute`, the `~Copyable` middleware fold) off
+/// the proxy's `_wireSubject` / `_wire<…>` / `_wireFactory_<key>` fields. These tests pin the emitted
+/// extension for every route shape, the `@Middleware` classification (factory / by-type / by-key), and the
+/// diagnostics.
+@Suite("Route-contributor generation")
 struct RouteContributorGenerationTests {
 
     /// Parse a fixture and return its first `@Controller` type as a `ControllerDeclaration`.
@@ -27,12 +27,18 @@ struct RouteContributorGenerationTests {
         fatalError("fixture has no controller")
     }
 
-    private func witnessBody(_ source: String, pathPrefix: String, subjectAccessor: String) -> String {
+    private func witnessBody(
+        _ source: String,
+        pathPrefix: String,
+        subjectAccessor: String,
+        factoryKeys: Set<String> = []
+    ) -> String {
         renderRegisterWireRoutesWitness(
             access: "",
             controller: controller(source),
             pathPrefix: pathPrefix,
-            subjectAccessor: subjectAccessor
+            subjectAccessor: subjectAccessor,
+            factoryKeys: factoryKeys
         ).witness
     }
 
@@ -49,7 +55,11 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/todos")
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/todos",
+            factoryKeys: []
+        )
         #expect(rendered.diagnostics.isEmpty)
         #expect(
             rendered.source == """
@@ -88,7 +98,11 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/x")
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/x",
+            factoryKeys: ["Keys.session"]
+        )
         #expect(
             rendered.source == """
                 extension _WireRouteContributor_C: RouteContributor {
@@ -121,7 +135,7 @@ struct RouteContributorGenerationTests {
 
     /// Every parameter-binding branch on one route — `@Path`/`@Query`/`@Header`/`@JSONBody`, an optional
     /// (`bindOptional`), a defaulted (`bindOptional(...) ?? default`), body collection, and a custom
-    /// response status. (The macro's own golden tests don't cover these binding shapes.)
+    /// response status.
     @Test func allParameterBindingShapes() {
         let source = """
             @Controller("/search")
@@ -139,7 +153,11 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/search")
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/search",
+            factoryKeys: []
+        )
         #expect(rendered.diagnostics.isEmpty)
         #expect(
             rendered.source == """
@@ -172,35 +190,57 @@ struct RouteContributorGenerationTests {
         )
     }
 
-    @Test func controllerAndRouteGenericMiddlewareOrder() {
+    // MARK: - @Middleware classification (factory / by-type / by-key)
+
+    /// Controller-scope wraps outer, route-scope inner. `.self` arguments are graph bindings injected by
+    /// type — folded as `self._wire<Type>`, never constructed inline.
+    @Test func controllerAndRouteByTypeMiddlewareOrder() {
         let source = """
             @Controller("/x")
-            @Middleware(ControllerMiddleware<WireContext, WireReader, WireSender>.self)
-            struct GenMw {
-                @Middleware(RouteMiddleware<WireContext, WireReader, WireSender>.self)
+            @Middleware(ControllerGate.self)
+            struct Gated {
+                @Middleware(RouteGate.self)
                 @Get("/y")
                 @ResponseStatus(.noContent)
                 func f() async throws {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/x")
-        // Controller-outer, route-inner, both re-spelt over the builder's associated types.
-        #expect(
-            rendered.source.contains(
-                "ControllerMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()"
-            )
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/x",
+            factoryKeys: []
         )
-        #expect(
-            rendered.source.contains(
-                "RouteMiddleware<Builder.RequestContext, Builder.Reader, Builder.ResponseSender>()"
-            )
-        )
-        let controllerIndex = rendered.source.range(of: "ControllerMiddleware<Builder")
-        let routeIndex = rendered.source.range(of: "RouteMiddleware<Builder")
+        #expect(rendered.source.contains("self._wireControllerGate"))
+        #expect(rendered.source.contains("self._wireRouteGate"))
+        let controllerIndex = rendered.source.range(of: "self._wireControllerGate")
+        let routeIndex = rendered.source.range(of: "self._wireRouteGate")
         #expect(controllerIndex != nil && routeIndex != nil)
         #expect(controllerIndex!.lowerBound < routeIndex!.lowerBound)
         #expect(rendered.source.contains("try await self._wireSubject.f()"))
+    }
+
+    /// A key that is *not* a `@Factory` template is a graph binding — folded as `self._wire<sanitised key>`,
+    /// distinct from the factory `create` call.
+    @Test func middlewareBindingKeyFold() {
+        let source = """
+            @Controller("/x")
+            @Middleware(Gates.primary)
+            struct C {
+                @Get("/y")
+                @ResponseStatus(.noContent)
+                func f() async throws {
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/x",
+            factoryKeys: []
+        )
+        #expect(rendered.source.contains("self._wireGates_primary"))
+        #expect(!rendered.source.contains("_wireFactory_"))
+        #expect(!rendered.source.contains(".create("))
     }
 
     @Test func rawRoutePassthrough() {
@@ -215,7 +255,11 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/users")
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
         #expect(rendered.diagnostics.isEmpty)
         #expect(
             rendered.source.contains(
@@ -225,12 +269,11 @@ struct RouteContributorGenerationTests {
         #expect(rendered.source.contains("try await self._wireSubject.events(responseSender: responseSender)"))
     }
 
-    // MARK: - Parity with the macro (drift guard)
+    // MARK: - Subject-accessor seam
 
-    /// The witness the tool emits (`_wireSubject`) is the witness the macro emits (`controller`) with only
-    /// the subject accessor changed — same register/bind/encode/fold logic, from the same generator. This
-    /// asserts that directly: swapping the accessor makes the two bodies identical.
-    @Test func witnessDiffersFromMacroOnlyBySubjectAccessor() {
+    /// The witness varies only by the subject accessor — swapping `_wireSubject` for another field leaves
+    /// the register/bind/encode/fold logic identical (it comes from the one generator, parameterised).
+    @Test func witnessVariesOnlyBySubjectAccessor() {
         let source = """
             @Controller("/todos")
             struct Todos {
@@ -241,9 +284,9 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let toolWitness = witnessBody(source, pathPrefix: "/todos", subjectAccessor: "_wireSubject")
-        let macroWitness = witnessBody(source, pathPrefix: "/todos", subjectAccessor: "controller")
-        #expect(toolWitness.replacingOccurrences(of: "self._wireSubject", with: "self.controller") == macroWitness)
+        let proxyWitness = witnessBody(source, pathPrefix: "/todos", subjectAccessor: "_wireSubject")
+        let otherWitness = witnessBody(source, pathPrefix: "/todos", subjectAccessor: "controller")
+        #expect(proxyWitness.replacingOccurrences(of: "self._wireSubject", with: "self.controller") == otherWitness)
     }
 
     @Test func subjectAccessorIsTheStructuralHalfContract() {
@@ -265,7 +308,8 @@ struct RouteContributorGenerationTests {
                 }
                 """
             ),
-            pathPrefix: ""
+            pathPrefix: "",
+            factoryKeys: []
         )
         #expect(rendered.diagnostics.count == 1)
         #expect(
@@ -286,7 +330,8 @@ struct RouteContributorGenerationTests {
                 }
                 """
             ),
-            pathPrefix: "/users"
+            pathPrefix: "/users",
+            factoryKeys: []
         )
         #expect(
             rendered.diagnostics.first?.message.message
@@ -307,7 +352,8 @@ struct RouteContributorGenerationTests {
                 }
                 """
             ),
-            pathPrefix: ""
+            pathPrefix: "",
+            factoryKeys: []
         )
         #expect(
             rendered.diagnostics.first?.message.message
@@ -346,6 +392,38 @@ struct RouteContributorGenerationTests {
         let beta = result.source.range(of: "extension _WireRouteContributor_Beta")
         #expect(alpha != nil && beta != nil)
         #expect(alpha!.lowerBound < beta!.lowerBound)
+    }
+
+    /// A controller in one file may fold a `@Factory` template declared in another: the tool collects
+    /// factory keys across every input source before folding any witness, so the cross-file `@Middleware`
+    /// still classifies as a factory (its `create` call), not a graph binding.
+    @Test func factoryKeyDeclaredInAnotherFileIsClassifiedAsFactory() {
+        let result = generateRouteContributors(files: [
+            (
+                "Middleware.swift",
+                """
+                @Factory(Keys.session)
+                @MiddlewareFactory
+                struct SessionMiddleware {}
+                """
+            ),
+            (
+                "Controller.swift",
+                """
+                @Controller("/x")
+                @Middleware(Keys.session)
+                struct C {
+                    @Get @ResponseStatus(.noContent) func f() async throws {}
+                }
+                """
+            ),
+        ])
+        #expect(result.diagnostics.isEmpty)
+        #expect(
+            result.source.contains(
+                "self._wireFactory_Keys_session.create(Builder.RequestContext.self, Builder.Reader.self, Builder.ResponseSender.self)"
+            )
+        )
     }
 
     @Test func fileWithNoControllersEmitsHeaderOnly() {

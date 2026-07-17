@@ -16,14 +16,14 @@ public let wireMVCControllerAlias = WireAdapterAnnotationV1(
     capability: .contributesProxy(to: WireMVCKeys.routeContributors, proxyTypePrefix: "_WireRouteContributor_")
 )
 
-/// `@Middleware(key)` declares that the annotated controller requires the factory synthesised from the
-/// keyed `@Factory` middleware template — the `.injectsFactoryOnArgument` capability. The plugin lifts
-/// the factory onto the controller's generated route-contributor proxy (the type that folds the
-/// middleware). (The `.self` forms of `@Middleware` are read inline by `@Controller` and constructed
-/// there, not factory cases; the synthesis skips them.)
-public let wireMVCMiddlewareFactoryAlias = WireAdapterAnnotationV1(
+/// `@Middleware(X)` declares that the annotated controller folds a middleware resolved from the graph —
+/// the `.injectsFromGraph` capability, lifted onto the controller's route-contributor proxy. The plugin
+/// dispatches on `X`: a `FactoryKey` naming a `@Factory` template synthesises and lifts `_WireFactory_<key>`;
+/// a `T.self` or a `BindingKey` injects the middleware binding itself (by type / by key) onto the proxy.
+/// The route codegen reads the same argument and folds the matching proxy field.
+public let wireMVCMiddlewareAlias = WireAdapterAnnotationV1(
     annotation: "Middleware",
-    capability: .injectsFactoryOnArgument
+    capability: .injectsFromGraph
 )
 
 /// Marks a controller: each `@Get`/`@Post`/… route is registered onto a `some RoutableHTTPServerBuilder`
@@ -86,19 +86,20 @@ public macro ResponseStatus(_ status: HTTPResponse.Status) =
 @attached(peer)
 public macro RawRoute() = #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
 
-/// Wrap a route (or, on the controller type, every route) in a `Middleware`. `T` is a graph binding
-/// that is the proposal's `Middleware` over the request/response box — it runs before the handler and
-/// can transform the box (e.g. enrich the `RequestContext`). Controller-scope `@Middleware` wraps
-/// outer, route-scope inner: `controller-outer → route-inner → handler`. The `@Controller` macro reads
-/// these off the type and each function; they expand to nothing themselves.
+/// Wrap a route (or, on the controller type, every route) in a `Middleware` resolved from the graph.
+/// `@Middleware(T.self)` folds the `T` binding by type; a generic-with-deps middleware is instead named
+/// by its `@Factory` key (the overload below). The middleware runs before the handler and can transform
+/// the box (e.g. enrich the `RequestContext`). Controller-scope `@Middleware` wraps outer, route-scope
+/// inner: `controller-outer → route-inner → handler`. A marker: the plugin lifts the binding onto the
+/// controller's route-contributor proxy and the route codegen folds it — the annotation expands to nothing.
 @attached(peer)
 public macro Middleware<T>(_ type: T.Type) =
     #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
 
-/// The factory case — `@Middleware(key)` where `key` is a `FactoryKey` naming a generic-with-deps
-/// middleware's `@Factory` template. The plugin synthesises the factory (`_WireFactory_<key>`), lifts
-/// it onto the controller, and the `@Controller` macro calls its `create` in the fold. See
-/// `wireMVCMiddlewareFactoryAlias`.
+/// The keyed form — `@Middleware(key)`. A `FactoryKey` naming a generic-with-deps middleware's `@Factory`
+/// template folds the synthesised factory (`_WireFactory_<key>`), specialised at the builder's box roles;
+/// any other `key` folds the graph binding stored under it. Either way the plugin lifts what the key names
+/// onto the controller's proxy and the route codegen folds the matching field. See `wireMVCMiddlewareAlias`.
 @attached(peer)
 public macro Middleware(_ key: FactoryKey) =
     #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
