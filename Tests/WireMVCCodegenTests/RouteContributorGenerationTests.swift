@@ -56,7 +56,9 @@ struct RouteContributorGenerationTests {
             }
             """
         let rendered = renderRouteContributorExtension(
-            controller: controller(source), pathPrefix: "/todos", factoryKeys: []
+            controller: controller(source),
+            pathPrefix: "/todos",
+            factoryKeys: []
         )
         #expect(rendered.diagnostics.isEmpty)
         #expect(
@@ -97,7 +99,9 @@ struct RouteContributorGenerationTests {
             }
             """
         let rendered = renderRouteContributorExtension(
-            controller: controller(source), pathPrefix: "/x", factoryKeys: ["Keys.session"]
+            controller: controller(source),
+            pathPrefix: "/x",
+            factoryKeys: ["Keys.session"]
         )
         #expect(
             rendered.source == """
@@ -150,7 +154,9 @@ struct RouteContributorGenerationTests {
             }
             """
         let rendered = renderRouteContributorExtension(
-            controller: controller(source), pathPrefix: "/search", factoryKeys: []
+            controller: controller(source),
+            pathPrefix: "/search",
+            factoryKeys: []
         )
         #expect(rendered.diagnostics.isEmpty)
         #expect(
@@ -201,7 +207,9 @@ struct RouteContributorGenerationTests {
             }
             """
         let rendered = renderRouteContributorExtension(
-            controller: controller(source), pathPrefix: "/x", factoryKeys: []
+            controller: controller(source),
+            pathPrefix: "/x",
+            factoryKeys: []
         )
         #expect(rendered.source.contains("self._wireControllerGate"))
         #expect(rendered.source.contains("self._wireRouteGate"))
@@ -226,7 +234,9 @@ struct RouteContributorGenerationTests {
             }
             """
         let rendered = renderRouteContributorExtension(
-            controller: controller(source), pathPrefix: "/x", factoryKeys: []
+            controller: controller(source),
+            pathPrefix: "/x",
+            factoryKeys: []
         )
         #expect(rendered.source.contains("self._wireGates_primary"))
         #expect(!rendered.source.contains("_wireFactory_"))
@@ -246,7 +256,9 @@ struct RouteContributorGenerationTests {
             }
             """
         let rendered = renderRouteContributorExtension(
-            controller: controller(source), pathPrefix: "/users", factoryKeys: []
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
         )
         #expect(rendered.diagnostics.isEmpty)
         #expect(
