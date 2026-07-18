@@ -3,4 +3,5 @@
 .DS_Store
 build.log
 swiftlint.zip
+.swift-version
 .vscode/

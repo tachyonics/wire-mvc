@@ -13,7 +13,14 @@ public import Wire
 /// plain, footgun-free binding — the proxy is the only type that holds the lifted factories.
 public let wireMVCControllerAlias = WireAdapterAnnotationV1(
     annotation: "Controller",
-    capability: .contributesProxy(to: WireMVCKeys.routeContributors, proxyTypePrefix: "_WireRouteContributor_")
+    capability: .contributesProxy(
+        to: WireMVCKeys.routeContributors,
+        proxyTypePrefix: "_WireRouteContributor_",
+        // Routes register once at bootstrap, so the proxy is app-scoped. A `@Scoped(seed:)` controller
+        // is then a scope bridge (the app-scoped proxy enters the request scope per request); a
+        // `@Singleton` controller the proxy holds directly.
+        proxyScope: .singleton
+    )
 )
 
 /// `@Middleware(X)` declares that the annotated controller folds a middleware resolved from the graph —
