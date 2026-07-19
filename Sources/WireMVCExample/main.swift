@@ -195,8 +195,9 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         let w2 = try JSONDecoder().decode(WhoAmI.self, from: b2)
         check(
             s1 == 200 && s2 == 200 && w1.path == "/whoami?who=ada" && w2.path == "/whoami?who=grace"
+                && w1.tag == "tag:/whoami?who=ada" && w2.tag == "tag:/whoami?who=grace"
                 && w1.storeShared && w2.storeShared,
-            "@Scoped(seed:) @Controller  → request-scoped value fresh per request, @Singleton shared"
+            "@Scoped(seed:) @Controller  → request-scoped value (async @Inject init) fresh per request, @Singleton shared"
         )
     }
 
