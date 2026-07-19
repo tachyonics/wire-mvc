@@ -87,6 +87,32 @@ struct RouteContributorGenerationTests {
         )
     }
 
+    @Test func scopedControllerConstructsPerRequestViaScopeEntry() {
+        // A `@Scoped(seed:)` controller is a bridge proxy: its witness constructs the controller fresh
+        // per request from the proxy's `_wireEnterScope` thunk (seeded by the request), then dispatches
+        // on that local — never the held `_wireSubject` (a bridge proxy has none).
+        let source = """
+            @Scoped(seed: HTTPRequest.self)
+            @Controller("/sessions")
+            struct Sessions {
+                @Get("/{id}")
+                @JSONResponse
+                func get(@Path id: String) async throws -> Session {
+                    fatalError()
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/sessions",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("let wireMVCController = try await self._wireEnterScope(request)"))
+        #expect(rendered.source.contains("try await wireMVCController.get(id: id)"))
+        #expect(!rendered.source.contains("_wireSubject"))
+    }
+
     @Test func middlewareFactoryKeyFold() {
         let source = """
             @Controller("/x")

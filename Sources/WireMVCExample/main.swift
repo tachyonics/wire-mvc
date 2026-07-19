@@ -173,6 +173,22 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         )
     }
 
+    // @Scoped(seed: HTTPRequest.self) @Controller — a request-scoped controller, constructed fresh per
+    // request from the request seed (the `_wireEnterScope` bridge thunk), injecting a request-scoped
+    // `RequestInfo` alongside the shared `@Singleton` `UserStore`. Two requests see two different
+    // request-scoped values (fresh per request); the singleton resolves for both (shared).
+    do {
+        let (s1, b1) = try await send("GET", "/whoami?who=ada", port: port)
+        let (s2, b2) = try await send("GET", "/whoami?who=grace", port: port)
+        let w1 = try JSONDecoder().decode(WhoAmI.self, from: b1)
+        let w2 = try JSONDecoder().decode(WhoAmI.self, from: b2)
+        check(
+            s1 == 200 && s2 == 200 && w1.path == "/whoami?who=ada" && w2.path == "/whoami?who=grace"
+                && w1.storeShared && w2.storeShared,
+            "@Scoped(seed:) @Controller  → request-scoped value fresh per request, @Singleton shared"
+        )
+    }
+
     // WireMVC.mountIntrospection — the graph's wiring model, served over the same router.
     do {
         let (status, body) = try await send("GET", "/wiring", port: port)

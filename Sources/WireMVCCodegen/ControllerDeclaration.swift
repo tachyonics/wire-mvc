@@ -76,4 +76,18 @@ public struct ControllerDeclaration {
     /// structural half's `proxyTypePrefix` (declared by `wireMVCControllerAlias`), so the macro's peer
     /// type, the plugin-synthesised binding, and the tool's extension all name the same type.
     public var proxyTypeName: String { "_WireRouteContributor_\(name)" }
+
+    /// The seed type of a `@Scoped(seed: S.self)` controller (`"S"`), or `nil` for an app-scoped
+    /// (`@Singleton`) controller. Drives per-request scope entry in the witness: a scoped controller is
+    /// constructed fresh per request from the proxy's `_wireEnterScope` thunk rather than held directly.
+    public var scopedSeedType: String? {
+        for case let .attribute(attr) in attributes where attr.attributeName.trimmedDescription == "Scoped" {
+            guard case let .argumentList(list) = attr.arguments,
+                let seedArgument = list.first(where: { $0.label?.text == "seed" })
+            else { continue }
+            let expression = seedArgument.expression.trimmedDescription
+            return expression.hasSuffix(".self") ? String(expression.dropLast(".self".count)) : expression
+        }
+        return nil
+    }
 }
