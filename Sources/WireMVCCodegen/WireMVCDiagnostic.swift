@@ -14,6 +14,10 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
     case unsupportedRawParameter(name: String, type: String)
     case rawRouteMissingSender(String)
     case middlewareFactoryRequiresFactory
+    case errorResponseClosureNeedsTypedParameter
+    case errorResponseUnresolvedMapping(String)
+    case errorResponseDuplicateType(type: String, scope: String)
+    case errorResponseCatchAllNotLast(scope: String)
 
     public var message: String {
         switch self {
@@ -33,6 +37,14 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
             "@RawRoute handler '\(route)' must take the response sender (a parameter generic over HTTPResponseSender) to write its response"
         case .middlewareFactoryRequiresFactory:
             "@MiddlewareFactory requires @Factory on the same type — it supplies the box-role mapping for a factory template. Add @Factory(key) to make this a Wire factory template."
+        case .errorResponseClosureNeedsTypedParameter:
+            "@ErrorResponse closure needs a typed parameter — spell the error type, e.g. { (e: NotFound) in … }, so the mapping matches on it"
+        case .errorResponseUnresolvedMapping(let reference):
+            "@ErrorResponse named-function reference '\(reference)' is not supported yet — a reference to the controller's own method is a circular macro reference, and a separate type needs cross-module resolution. Use an inline typed-parameter closure: @ErrorResponse({ (e: SomeError) in … })"
+        case .errorResponseDuplicateType(let type, let scope):
+            "@ErrorResponse maps '\(type)' more than once at \(scope) scope — each error type needs a distinct mapping at a scope (a route entry overrides a controller entry for the same type)"
+        case .errorResponseCatchAllNotLast(let scope):
+            "the @ErrorResponse Swift.Error catch-all must be the last error entry at \(scope) scope — a mapping listed after it can never be reached"
         }
     }
 
@@ -49,6 +61,10 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
         case .unsupportedRawParameter: id = "unsupportedRawParameter"
         case .rawRouteMissingSender: id = "rawRouteMissingSender"
         case .middlewareFactoryRequiresFactory: id = "middlewareFactoryRequiresFactory"
+        case .errorResponseClosureNeedsTypedParameter: id = "errorResponseClosureNeedsTypedParameter"
+        case .errorResponseUnresolvedMapping: id = "errorResponseUnresolvedMapping"
+        case .errorResponseDuplicateType: id = "errorResponseDuplicateType"
+        case .errorResponseCatchAllNotLast: id = "errorResponseCatchAllNotLast"
         }
         return MessageID(domain: "WireMVC", id: id)
     }

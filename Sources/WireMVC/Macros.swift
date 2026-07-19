@@ -111,6 +111,47 @@ public macro Middleware<T>(_ type: T.Type) =
 public macro Middleware(_ key: FactoryKey) =
     #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
 
+// ── Route error handling (`@ErrorResponse`) ──
+
+/// Map an error thrown by a route (from the handler, or from a `@Scoped` binding built at scope entry)
+/// to a response, at controller scope (every route) or route scope (one route). Route entries are
+/// consulted before controller entries (route overrides controller); an unmapped throw is re-thrown to
+/// the framework's default (500) — WireMVC synthesises no 500 of its own. A **marker**: the route
+/// codegen reads the annotation and folds the mapping into the terminal's `catch` — the annotation
+/// expands to nothing. Two forms:
+///
+/// - `@ErrorResponse(E.self, .status)` — the ultralight case: for a thrown `E`, respond with `status`.
+/// - `@ErrorResponse({ (e: E) in … })` — an inline typed-parameter closure (the `@Teardown(<action>)`
+///   shape), for a richer response (a JSON body, logic). The parameter type must be annotated and is the
+///   matched error type. Static by construction (no `self`), so it maps a handler throw *and* a throwing
+///   request-scoped binding at scope entry.
+///
+/// A form whose error type is `Swift.Error` is the **catch-all** — consulted after the built-in
+/// `WireMVCBindingError`→status mapping (so param-decode failures keep their 415/422), before the
+/// final rethrow. At most one catch-all per scope, and it must be the last error entry at its scope.
+///
+/// > A named-function reference (`@ErrorResponse(SomeType.map)`) is **not** supported yet: a reference to
+/// > the annotated controller's own method is a circular macro reference (the compiler can't resolve the
+/// > type mid-expansion), and a reference to a separate type needs cross-module signature resolution the
+/// > codegen doesn't do. Use an inline closure.
+///
+/// See [Notes/RouteErrorHandling.md](RouteErrorHandling.md).
+@attached(peer)
+public macro ErrorResponse<E: Error>(_ type: E.Type, _ status: HTTPResponse.Status) =
+    #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
+/// The inline-closure form — `@ErrorResponse({ (e: E) in … })`. `E` (including `Swift.Error` for the
+/// catch-all) is the matched type, read from the closure's annotated parameter.
+@attached(peer)
+public macro ErrorResponse<E: Error>(_ respond: (E) throws -> WireMVCOutcome) =
+    #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
+/// The catch-all overload — a mapping over `any Error`, so overload resolution binds a `Swift.Error`
+/// mapping here directly rather than through `E == any Error` inference on the generic form above.
+@attached(peer)
+public macro ErrorResponse(_ respond: (any Error) throws -> WireMVCOutcome) =
+    #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
 // ── Generic-with-deps middleware: the producer side (`@Factory` + `@MiddlewareFactory`) ──
 
 /// The box roles a generic middleware's assisted parameters fill, in the proposal box's canonical order

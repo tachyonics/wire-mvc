@@ -16,6 +16,19 @@ public enum WireMVCOutcome: Sendable {
     case body([UInt8], HTTPResponse.Status)
     case status(HTTPResponse.Status)
 
+    /// Encode an `Encodable` value as a JSON body with the given status — the outcome-building
+    /// convenience an `@ErrorResponse` mapping spells (`.json(Problem(e.message), status: .badRequest)`).
+    /// Throwing (encoding can fail); a throw from a mapping propagates out to the framework like any
+    /// other unmapped error. Mirrors `WireMVCResponse.json`, surfaced on `WireMVCOutcome` so a mapping
+    /// returns one directly.
+    public static func json<T: Encodable>(
+        _ value: T,
+        status: HTTPResponse.Status = .ok
+    ) throws -> WireMVCOutcome {
+        let data = try JSONEncoder().encode(value)
+        return .body([UInt8](data), status)
+    }
+
     /// Send this outcome on the response sender, consuming it. The sender is `consuming` (not `consuming
     /// sending`): the terminal consumes it within its own region, and through a middleware fold it
     /// arrives from the box's `withContents` as a plain `consuming` value (not `sending`).
@@ -40,7 +53,6 @@ public enum WireMVCResponse {
         _ value: T,
         status: HTTPResponse.Status
     ) throws -> WireMVCOutcome {
-        let data = try JSONEncoder().encode(value)
-        return .body([UInt8](data), status)
+        try WireMVCOutcome.json(value, status: status)
     }
 }

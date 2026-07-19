@@ -9,6 +9,12 @@ struct NewUser: Codable, Sendable {
     let name: String
 }
 
+/// The JSON body an `@ErrorResponse` mapping encodes for a domain failure — so the example can assert a
+/// mapped error carries a real (decoded) body, not just a status.
+struct APIError: Codable, Sendable, Equatable {
+    let message: String
+}
+
 /// Echoes the bound query/header values back, so the example can assert they were actually
 /// received (not just that their absence is tolerated).
 struct Listing: Codable, Sendable, Equatable {

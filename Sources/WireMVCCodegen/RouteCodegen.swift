@@ -55,6 +55,8 @@ struct RouteBlockGenerator {
         scopedSeedType = controller.scopedSeedType
         // Controller-scope `@Middleware` wraps every route, outer to each route's own middleware.
         let controllerMiddleware = middlewareConstructions(from: controller.attributes)
+        // Controller-scope `@ErrorResponse` covers every route, consulted after each route's own.
+        let controllerErrorMappings = errorMappings(from: controller.attributes, scopeLabel: "controller")
         var blocks: [String] = []
         for function in controller.functions {
             guard let verb = verb(from: function.attributes) else { continue }  // no verb → helper, skip
@@ -62,7 +64,8 @@ struct RouteBlockGenerator {
                 function: function,
                 verb: verb,
                 prefix: pathPrefix,
-                controllerMiddleware: controllerMiddleware
+                controllerMiddleware: controllerMiddleware,
+                controllerErrorMappings: controllerErrorMappings
             ) {
                 blocks.append(block)
             }
@@ -74,7 +77,8 @@ struct RouteBlockGenerator {
         function: FunctionDeclSyntax,
         verb: Verb,
         prefix: String,
-        controllerMiddleware: [String]
+        controllerMiddleware: [String],
+        controllerErrorMappings: [ErrorMapping]
     ) -> String? {
         let path = joinPath(prefix, verb.path ?? "")
         let middleware = controllerMiddleware + middlewareConstructions(from: function.attributes)
@@ -87,6 +91,9 @@ struct RouteBlockGenerator {
         let hasBinds = !binds.isEmpty
         let call = "try await \(subjectExpression).\(function.name.text)(\(callArgs.joined(separator: ", ")))"
         guard let response = responseComputation(from: function, call: call) else { return nil }
+        // Route-scope `@ErrorResponse` is consulted before the controller's (route overrides controller).
+        let errorMappings = self.errorMappings(from: function.attributes, scopeLabel: "route")
+            + controllerErrorMappings
         // A scoped controller's terminal always needs `request` — it is the scope-entry seed.
         let requestName = (hasBinds || scopedSeedType != nil) ? "request" : "_"
         let parametersName = hasBinds ? "pathParameters" : "_"
@@ -99,8 +106,14 @@ struct RouteBlockGenerator {
             contextName: "_",
             parametersName: parametersName,
             readerName: readerName,
-            terminalBody: scopeEntryProloguePrefix
-                + closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response)
+            terminalBody: closureBody(
+                hasBinds: hasBinds,
+                hasBody: hasBody,
+                binds: binds,
+                response: response,
+                scopeEntryPrologue: scopeEntryProloguePrefix,
+                errorMappings: errorMappings
+            )
         )
     }
 }
@@ -389,22 +402,49 @@ extension RouteBlockGenerator {
 
     /// The registration closure body. Compute the outcome — collecting the body first when a
     /// `@JSONBody` is present, mapping a `WireMVCBindingError` to its status — then send it once.
-    fileprivate func closureBody(hasBinds: Bool, hasBody: Bool, binds: [String], response: String) -> String {
-        guard hasBinds else {
+    ///
+    /// With no `@ErrorResponse`, the shipped output is preserved verbatim: the scope-entry prologue sits
+    /// outside the `do`, and the `catch` maps only `WireMVCBindingError` (every other throw propagates to
+    /// the framework). With `@ErrorResponse` present, the scope-entry prologue moves *inside* the `do` so
+    /// a throwing request-scoped binding maps like a handler throw, and the `catch` consults the composed
+    /// mappings (route-inner first) → binding-error built-in → `Swift.Error` catch-all → re-throw.
+    fileprivate func closureBody(
+        hasBinds: Bool,
+        hasBody: Bool,
+        binds: [String],
+        response: String,
+        scopeEntryPrologue: String,
+        errorMappings: [ErrorMapping]
+    ) -> String {
+        let collect = hasBody ? "let requestBody = try await WireMVCRequest.collectBody(reader)\n" : ""
+
+        guard !errorMappings.isEmpty else {
+            guard hasBinds else {
+                return """
+                    \(scopeEntryPrologue)let wireMVCOutcome: WireMVCOutcome
+                    \(response)
+                    try await wireMVCOutcome.send(on: responseSender)
+                    """
+            }
             return """
-                let wireMVCOutcome: WireMVCOutcome
+                \(scopeEntryPrologue)let wireMVCOutcome: WireMVCOutcome
+                do {
+                \(collect)\(binds.joined(separator: "\n"))
                 \(response)
+                } catch let wireMVCBindingError as WireMVCBindingError {
+                    wireMVCOutcome = .status(wireMVCBindingError.status)
+                }
                 try await wireMVCOutcome.send(on: responseSender)
                 """
         }
-        let collect = hasBody ? "let requestBody = try await WireMVCRequest.collectBody(reader)\n" : ""
+
+        let bindsBlock = binds.isEmpty ? "" : binds.joined(separator: "\n") + "\n"
         return """
             let wireMVCOutcome: WireMVCOutcome
             do {
-            \(collect)\(binds.joined(separator: "\n"))
-            \(response)
-            } catch let wireMVCBindingError as WireMVCBindingError {
-                wireMVCOutcome = .status(wireMVCBindingError.status)
+            \(scopeEntryPrologue)\(collect)\(bindsBlock)\(response)
+            } catch let wireMVCError {
+            \(errorCatchClause(mappings: errorMappings, includeBindingBuiltin: hasBinds))
             }
             try await wireMVCOutcome.send(on: responseSender)
             """
@@ -501,6 +541,158 @@ extension RouteBlockGenerator {
 /// The binding-wrapper attribute names a handler parameter can carry. File-scope (not a stored property)
 /// so the generator's methods can live in extensions.
 private let routeBindingWrappers: Set<String> = ["Path", "Query", "JSONBody", "Header"]
+
+// MARK: - Error response codegen (`@ErrorResponse`)
+
+/// How an `@ErrorResponse` entry produces the outcome — a bare status (the `(E.self, .status)` form) or a
+/// callable applied to the bound error (an inline `{ (e: E) in … }` closure). File-scope to keep the
+/// generator's nested types one level deep.
+fileprivate enum ErrorResponder {
+    case status(String)  // a status expression, e.g. ".notFound"
+    case call(String)  // a callable expression: "({ (e: T) in … })"
+}
+
+extension RouteBlockGenerator {
+    /// One `@ErrorResponse` entry: the error type it matches, whether that type is the `Swift.Error`
+    /// catch-all, and how it produces the outcome — a bare status (the `(E.self, .status)` form) or an
+    /// inline `{ (e: E) in … }` closure applied to the bound error.
+    struct ErrorMapping {
+        let errorType: String
+        let isCatchAll: Bool
+        fileprivate let responder: ErrorResponder
+        var isThrowing: Bool { if case .call = responder { return true } else { return false } }
+    }
+
+    /// Read the `@ErrorResponse` entries on one scope's attributes (controller or route), in source
+    /// order, resolving a static-method reference against the controller declaration. Appends the
+    /// duplicate-type and catch-all-ordering diagnostics.
+    mutating func errorMappings(from attributes: AttributeListSyntax, scopeLabel: String) -> [ErrorMapping] {
+        var mappings: [ErrorMapping] = []
+        var seenTypes: Set<String> = []
+        var catchAllSeen = false
+        for case let .attribute(attr) in attributes
+        where attr.attributeName.trimmedDescription == "ErrorResponse" {
+            guard let mapping = errorMapping(from: attr) else { continue }
+            if catchAllSeen {
+                diagnostics.append(RouteCodegenDiagnostic(.errorResponseCatchAllNotLast(scope: scopeLabel), at: attr))
+            }
+            if !seenTypes.insert(mapping.errorType).inserted {
+                diagnostics.append(
+                    RouteCodegenDiagnostic(
+                        .errorResponseDuplicateType(type: mapping.errorType, scope: scopeLabel),
+                        at: attr
+                    )
+                )
+            }
+            if mapping.isCatchAll { catchAllSeen = true }
+            mappings.append(mapping)
+        }
+        return mappings
+    }
+
+    /// Parse one `@ErrorResponse(...)` attribute, or `nil` (with a diagnostic) if it can't be resolved.
+    private mutating func errorMapping(from attr: AttributeSyntax) -> ErrorMapping? {
+        guard let arguments = attr.arguments?.as(LabeledExprListSyntax.self), let first = arguments.first
+        else { return nil }
+        // Form (1): `(E.self, .status)`.
+        if arguments.count >= 2, let status = arguments.dropFirst().first {
+            let typeExpr = first.expression.trimmedDescription
+            guard typeExpr.hasSuffix(".self") else {
+                diagnostics.append(RouteCodegenDiagnostic(.errorResponseUnresolvedMapping(typeExpr), at: attr))
+                return nil
+            }
+            let errorType = String(typeExpr.dropLast(".self".count))
+            return ErrorMapping(
+                errorType: errorType,
+                isCatchAll: isCatchAllErrorType(errorType),
+                responder: .status(status.expression.trimmedDescription)
+            )
+        }
+        // Form (3): an inline typed-parameter closure.
+        if let closure = first.expression.as(ClosureExprSyntax.self) {
+            guard let paramType = closureParameterType(closure) else {
+                diagnostics.append(RouteCodegenDiagnostic(.errorResponseClosureNeedsTypedParameter, at: closure))
+                return nil
+            }
+            return ErrorMapping(
+                errorType: paramType,
+                isCatchAll: isCatchAllErrorType(paramType),
+                responder: .call("(\(closure.trimmedDescription))")
+            )
+        }
+        // A named-function reference (`@ErrorResponse(SomeType.map)`) is deferred: a reference to the
+        // annotated controller's own method is a circular macro reference (the compiler can't resolve the
+        // type mid-expansion), and a reference to a separate type needs cross-module signature resolution
+        // the codegen doesn't do. Diagnose and steer to an inline closure. See Notes/RouteErrorHandling.md.
+        diagnostics.append(
+            RouteCodegenDiagnostic(.errorResponseUnresolvedMapping(first.expression.trimmedDescription), at: attr)
+        )
+        return nil
+    }
+
+    /// The closure's first parameter type (`{ (e: NotFound) in … }` → `"NotFound"`), or `nil` if the
+    /// parameter is untyped (`{ e in … }`) — which can't be matched on and is diagnosed.
+    private func closureParameterType(_ closure: ClosureExprSyntax) -> String? {
+        guard let signature = closure.signature,
+            case let .parameterClause(clause)? = signature.parameterClause,
+            let type = clause.parameters.first?.type
+        else { return nil }
+        return type.trimmedDescription
+    }
+
+    /// Whether an error type is the `Swift.Error` / `any Error` catch-all — a trailing `Error` component
+    /// after any `any ` prefix.
+    private func isCatchAllErrorType(_ type: String) -> Bool {
+        var base = type
+        while base.hasPrefix("any ") { base = String(base.dropFirst("any ".count)) }
+        return (base.split(separator: ".").last.map(String.init) ?? base) == "Error"
+    }
+
+    /// The `catch` clause body assigning `wireMVCOutcome` — consult the composed mappings (route-inner
+    /// first, already ordered by the caller) → the built-in binding-error status → the `Swift.Error`
+    /// catch-all if present, else re-throw `wireMVCError` out to the framework.
+    func errorCatchClause(mappings: [ErrorMapping], includeBindingBuiltin: Bool) -> String {
+        var elements: [String] = []
+        for mapping in mappings where !mapping.isCatchAll {
+            elements.append(chainElement(mapping, terminal: false))
+        }
+        if includeBindingBuiltin {
+            elements.append("(wireMVCError as? WireMVCBindingError).map { WireMVCOutcome.status($0.status) }")
+        }
+        let catchAll = mappings.first { $0.isCatchAll }
+        if let catchAll { elements.append(chainElement(catchAll, terminal: true)) }
+
+        let tryPrefix = mappings.contains(where: \.isThrowing) ? "try " : ""
+        let chain = elements.joined(separator: "\n?? ")
+        if catchAll != nil {
+            return "wireMVCOutcome = \(tryPrefix)(\n\(chain)\n)"
+        }
+        return """
+            if let wireMVCMapped = \(tryPrefix)(
+            \(chain)
+            ) {
+                wireMVCOutcome = wireMVCMapped
+            } else {
+                throw wireMVCError
+            }
+            """
+    }
+
+    /// One element of the `??` consultation chain. A non-terminal element yields `WireMVCOutcome?`
+    /// (nil = fall through); the terminal (catch-all) element yields a non-optional `WireMVCOutcome`.
+    private func chainElement(_ mapping: ErrorMapping, terminal: Bool) -> String {
+        switch mapping.responder {
+        case .status(let status):
+            return terminal
+                ? "WireMVCOutcome.status(\(status))"
+                : "(wireMVCError is \(mapping.errorType) ? WireMVCOutcome.status(\(status)) : nil)"
+        case .call(let callable):
+            return terminal
+                ? "wireMVCRespondAny(to: wireMVCError, \(callable))"
+                : "wireMVCRespond(to: wireMVCError, \(callable))"
+        }
+    }
+}
 
 // MARK: - Factory-lift naming (structural ↔ domain handshake)
 
