@@ -13,6 +13,11 @@ import WireMVC
 @Middleware(RequestLogMiddlewareKeys.factory)  // controller-scope, generic dep-free
 @Middleware(SessionMiddlewareKeys.factory)  // controller-scope, generic-with-deps (factory-lifted by key)
 @Middleware(AuditMiddlewareKeys.factory)  // controller-scope, generic-with-deps, non-canonical parameter order
+// controller-scope @ErrorResponse: a thrown UserStore.NotFound → 404 + JSON body. An inline
+// typed-parameter closure — folded into the generated terminal's `catch`, called when a route throws
+// `UserStore.NotFound` (e.g. `getUser`'s `try store.find(id)` for an unknown id, which returned 500
+// before M5.4E).
+@ErrorResponse({ (_: UserStore.NotFound) in try .json(APIError(message: "user not found"), status: .notFound) })
 struct UsersController: Sendable {
     @Inject var store: UserStore
 

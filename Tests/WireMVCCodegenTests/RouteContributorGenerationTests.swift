@@ -216,6 +216,262 @@ struct RouteContributorGenerationTests {
         )
     }
 
+    // MARK: - @ErrorResponse (route error handling)
+
+    /// A controller-scope `(E.self, .status)` shorthand covers every route: the terminal `catch`
+    /// consults it (folding the binding-error built-in and re-throwing an unmapped error to the framework).
+    @Test func controllerScopeStatusShorthandCoversRoute() {
+        let source = """
+            @Controller("/users")
+            @ErrorResponse(NotFound.self, .notFound)
+            struct Users {
+                @Get("/{id}")
+                @JSONResponse
+                func get(@Path id: String) async throws -> User {
+                    fatalError()
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        // No catch-all → guarded assignment that re-throws when nothing matched.
+        #expect(rendered.source.contains("} catch let wireMVCError {"))
+        #expect(rendered.source.contains("(wireMVCError is NotFound ? WireMVCOutcome.status(.notFound) : nil)"))
+        // The binding-error built-in is folded in (BasicFormat may reflow the trailing closure).
+        #expect(rendered.source.contains("(wireMVCError as? WireMVCBindingError).map"))
+        #expect(rendered.source.contains("WireMVCOutcome.status($0.status)"))
+        #expect(rendered.source.contains("throw wireMVCError"))
+        // The shipped binding-only catch is gone once @ErrorResponse is present.
+        #expect(!rendered.source.contains("catch let wireMVCBindingError as WireMVCBindingError"))
+    }
+
+    /// A route-scope entry is consulted before the controller entry (route overrides): a route closure
+    /// mapping is folded ahead of the controller's status shorthand.
+    @Test func routeClosureOverridesController() {
+        let source = """
+            @Controller("/users")
+            @ErrorResponse(NotFound.self, .notFound)
+            struct Users {
+                @Get("/{id}")
+                @JSONResponse
+                @ErrorResponse({ (e: NotFound) in .status(.gone) })
+                func get(@Path id: String) async throws -> User {
+                    fatalError()
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        let generated = rendered.source
+        // Route closure is folded (through the helper), consulted before the controller's status shorthand.
+        let routeCall = generated.range(of: "wireMVCRespond(to: wireMVCError, ({ (e: NotFound) in")
+        let controllerStatus = generated.range(
+            of: "(wireMVCError is NotFound ? WireMVCOutcome.status(.notFound) : nil)"
+        )
+        #expect(routeCall != nil && controllerStatus != nil)
+        #expect(routeCall!.lowerBound < controllerStatus!.lowerBound)
+        // A closure mapping throws through the helper, so the chain is `try`-prefixed.
+        #expect(generated.contains("= try"))
+    }
+
+    /// An inline typed-parameter closure is spliced and applied through `wireMVCRespond`.
+    @Test func inlineClosureMapping() {
+        let source = """
+            @Controller("/users")
+            struct Users {
+                @Post
+                @JSONResponse(status: .created)
+                @ErrorResponse({ (e: ValidationError) in try .json(Problem(e.message), status: .unprocessableContent) })
+                func create(@JSONBody new: NewUser) async throws -> User {
+                    fatalError()
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("wireMVCRespond(to: wireMVCError, ({ (e: ValidationError) in"))
+    }
+
+    /// A `Swift.Error` catch-all closure folds through `wireMVCRespondAny` as the non-optional terminal,
+    /// so the assignment is direct (no guarded `else { throw }`).
+    @Test func catchAllClosureIsTerminal() {
+        let source = """
+            @Controller("/users")
+            @ErrorResponse({ (e: Swift.Error) in .status(.internalServerError) })
+            struct Users {
+                @Get("/{id}")
+                @JSONResponse
+                func get(@Path id: String) async throws -> User {
+                    fatalError()
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("wireMVCRespondAny(to: wireMVCError, ({ (e: Swift.Error) in"))
+        #expect(rendered.source.contains("wireMVCOutcome = try ("))
+        // A catch-all matches everything, so nothing is re-thrown from the terminal.
+        #expect(!rendered.source.contains("throw wireMVCError"))
+    }
+
+    /// A route with no bindings still gets a `do`/`catch` when it declares an `@ErrorResponse`, so a
+    /// handler throw is mapped (the shipped no-binds fast path has no `catch`).
+    @Test func noBindsRouteGainsCatchForErrorResponse() {
+        let source = """
+            @Controller("/users")
+            struct Users {
+                @Get
+                @JSONResponse
+                @ErrorResponse(NotFound.self, .notFound)
+                func list() async throws -> [User] {
+                    fatalError()
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("do {"))
+        #expect(rendered.source.contains("} catch let wireMVCError {"))
+        // No bindings → the binding-error built-in is not folded in.
+        #expect(!rendered.source.contains("as? WireMVCBindingError"))
+    }
+
+    /// A `@Scoped(seed:)` controller with an `@ErrorResponse` moves the scope-entry construction *inside*
+    /// the `do`, so a throwing request-scoped binding maps like a handler throw.
+    @Test func scopedControllerScopeEntryInsideDoWhenMapped() {
+        let source = """
+            @Scoped(seed: HTTPRequest.self)
+            @Controller("/me")
+            @ErrorResponse(Unauthenticated.self, .unauthorized)
+            struct Me {
+                @Get
+                @JSONResponse
+                func me() async throws -> Profile {
+                    fatalError()
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/me",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        let generated = rendered.source
+        let doOpen = generated.range(of: "do {")
+        let scopeEntry = generated.range(of: "let wireMVCController = try await self._wireEnterScope(request)")
+        #expect(doOpen != nil && scopeEntry != nil)
+        #expect(doOpen!.lowerBound < scopeEntry!.lowerBound)  // scope entry is inside the do
+    }
+
+    // MARK: - @ErrorResponse diagnostics
+
+    @Test func untypedClosureParameterIsDiagnosed() {
+        let source = """
+            @Controller("/users")
+            struct Users {
+                @Get @JSONResponse
+                @ErrorResponse({ e in .status(.internalServerError) })
+                func list() async throws -> [User] { fatalError() }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(
+            rendered.diagnostics.contains {
+                if case .errorResponseClosureNeedsTypedParameter = $0.message { return true } else { return false }
+            }
+        )
+    }
+
+    @Test func unresolvedStaticReferenceIsDiagnosed() {
+        let source = """
+            @Controller("/users")
+            struct Users {
+                @Get @JSONResponse
+                @ErrorResponse(SharedErrors.handleNotFound)
+                func list() async throws -> [User] { fatalError() }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(
+            rendered.diagnostics.contains {
+                if case .errorResponseUnresolvedMapping = $0.message { return true } else { return false }
+            }
+        )
+    }
+
+    @Test func duplicateErrorTypeAtOneScopeIsDiagnosed() {
+        let source = """
+            @Controller("/users")
+            @ErrorResponse(NotFound.self, .notFound)
+            @ErrorResponse(NotFound.self, .gone)
+            struct Users {
+                @Get @JSONResponse
+                func list() async throws -> [User] { fatalError() }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(
+            rendered.diagnostics.contains {
+                if case .errorResponseDuplicateType = $0.message { return true } else { return false }
+            }
+        )
+    }
+
+    @Test func catchAllNotLastIsDiagnosed() {
+        let source = """
+            @Controller("/users")
+            @ErrorResponse({ (e: Swift.Error) in .status(.internalServerError) })
+            @ErrorResponse(NotFound.self, .notFound)
+            struct Users {
+                @Get @JSONResponse
+                func list() async throws -> [User] { fatalError() }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
+        #expect(
+            rendered.diagnostics.contains {
+                if case .errorResponseCatchAllNotLast = $0.message { return true } else { return false }
+            }
+        )
+    }
+
     // MARK: - @Middleware classification (factory / by-type / by-key)
 
     /// Controller-scope wraps outer, route-scope inner. `.self` arguments are graph bindings injected by

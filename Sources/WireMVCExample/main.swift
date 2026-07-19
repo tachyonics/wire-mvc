@@ -87,6 +87,17 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         )
     }
 
+    // @ErrorResponse(UsersController.userNotFound) — getUser throws UserStore.NotFound for an unknown id;
+    // the controller-scope mapping turns it into 404 + a JSON body (500 before M5.4E).
+    do {
+        let (status, body) = try await send("GET", "/users/999", port: port)
+        let error = try JSONDecoder().decode(APIError.self, from: body)
+        check(
+            status == 404 && error == APIError(message: "user not found"),
+            "GET /users/999 (missing)  → 404, @ErrorResponse mapped UserStore.NotFound to a JSON body"
+        )
+    }
+
     // @Post @JSONResponse(status: .created) @JSONBody — 201, JSON in/out
     do {
         let (status, body) = try await send(
