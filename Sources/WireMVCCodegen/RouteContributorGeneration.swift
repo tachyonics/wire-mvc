@@ -73,6 +73,13 @@ public func renderRouteContributorExtension(
 /// witness references the same field the structural half declares. The two meet on this name.
 public let contributorProxySubjectAccessor = "_wireSubject"
 
+/// The method name the plugin-emitted structural proxy exposes a *bridging* (scoped) controller's
+/// scope-entry thunk under — WireGen's `_wireEnterScope` contract
+/// (`WireGenCore.contributorProxyScopeEntryFieldName`). A scoped controller's witness calls
+/// `self._wireEnterScope(seed)` per request to construct the controller fresh; restated here so the
+/// domain witness names the same field the structural half declares.
+public let contributorProxyScopeEntryAccessor = "_wireEnterScope"
+
 /// Parse each input Swift source, generate a route-contributor `extension` for every `@Controller` type
 /// across them, and return one combined source (the files' imports + `import WireMVC` + the extensions)
 /// plus the diagnostics resolved to source locations. No controllers → header only. This is the tool's

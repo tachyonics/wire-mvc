@@ -24,12 +24,35 @@ struct RouteBlockGenerator {
     /// `@Middleware(X)` argument is classified: a key in this set is a factory (its `create` is called
     /// on the lifted `_wireFactory_<key>`); any other key is a graph binding (referenced as `_wire<key>`).
     let factoryKeys: Set<String>
+    /// Set for a `@Scoped(seed:)` controller (the seed type): its routes construct the controller fresh
+    /// per request from the proxy's `_wireEnterScope` thunk, rather than calling the held `_wireSubject`.
+    /// `nil` for an app-scoped (`@Singleton`) controller. Set at the start of `routeBlocks`.
+    private var scopedSeedType: String?
     private(set) var diagnostics: [RouteCodegenDiagnostic] = []
+
+    /// The expression the witness calls the controller through — a per-request `wireMVCController` local
+    /// for a scoped controller, else the held subject field (`self._wireSubject`).
+    var subjectExpression: String {
+        scopedSeedType == nil ? "self.\(subjectAccessor)" : scopeEntryLocalName
+    }
+
+    /// The per-request scoped-controller local's name — deliberately `wireMVC`-prefixed so it can't
+    /// collide with a handler's decoded parameter locals.
+    private var scopeEntryLocalName: String { "wireMVCController" }
+
+    /// The line that enters the request scope and constructs the controller, prepended to a scoped
+    /// route's terminal body. The seed is the register closure's `request` (seed-from-`HTTPRequest`).
+    private var scopeEntryProloguePrefix: String {
+        scopedSeedType == nil
+            ? ""
+            : "let \(scopeEntryLocalName) = try await self.\(contributorProxyScopeEntryAccessor)(request)\n"
+    }
 
     /// The joined `builder.register` blocks for every verb-annotated function on the controller — the
     /// witness body. A route that fails validation is diagnosed at its offending node and skipped, so
     /// the rest of the controller still generates (no cascade of downstream errors).
     mutating func routeBlocks(of controller: ControllerDeclaration, pathPrefix: String) -> String {
+        scopedSeedType = controller.scopedSeedType
         // Controller-scope `@Middleware` wraps every route, outer to each route's own middleware.
         let controllerMiddleware = middlewareConstructions(from: controller.attributes)
         var blocks: [String] = []
@@ -62,9 +85,10 @@ struct RouteBlockGenerator {
         guard let (binds, callArgs) = parameterBindings(of: function, path: path, hasBody: hasBody)
         else { return nil }
         let hasBinds = !binds.isEmpty
-        let call = "try await self.\(subjectAccessor).\(function.name.text)(\(callArgs.joined(separator: ", ")))"
+        let call = "try await \(subjectExpression).\(function.name.text)(\(callArgs.joined(separator: ", ")))"
         guard let response = responseComputation(from: function, call: call) else { return nil }
-        let requestName = hasBinds ? "request" : "_"
+        // A scoped controller's terminal always needs `request` — it is the scope-entry seed.
+        let requestName = (hasBinds || scopedSeedType != nil) ? "request" : "_"
         let parametersName = hasBinds ? "pathParameters" : "_"
         let readerName = hasBody ? "reader" : "_"
         return emitRegister(
@@ -75,7 +99,8 @@ struct RouteBlockGenerator {
             contextName: "_",
             parametersName: parametersName,
             readerName: readerName,
-            terminalBody: closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response)
+            terminalBody: scopeEntryProloguePrefix
+                + closureBody(hasBinds: hasBinds, hasBody: hasBody, binds: binds, response: response)
         )
     }
 }
