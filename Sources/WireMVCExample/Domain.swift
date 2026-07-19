@@ -42,4 +42,9 @@ struct UserStore: Sendable {
     func list(limit: Int) -> [User] {
         (0..<limit).map { User(id: "u\($0)", name: "user-\($0)") }
     }
+
+    /// A canned *async* lookup, awaited by `RequestInfo`'s `@Inject init` — so the example verifies a
+    /// request-scoped binding can be constructed through an `async` init (swift-wire emitting `await` in
+    /// the scope-entry thunk), not only a synchronous one.
+    func tag(for path: String) async -> String { "tag:\(path)" }
 }
