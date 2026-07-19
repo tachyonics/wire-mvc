@@ -92,7 +92,8 @@ struct RouteBlockGenerator {
         let call = "try await \(subjectExpression).\(function.name.text)(\(callArgs.joined(separator: ", ")))"
         guard let response = responseComputation(from: function, call: call) else { return nil }
         // Route-scope `@ErrorResponse` is consulted before the controller's (route overrides controller).
-        let errorMappings = self.errorMappings(from: function.attributes, scopeLabel: "route")
+        let errorMappings =
+            self.errorMappings(from: function.attributes, scopeLabel: "route")
             + controllerErrorMappings
         // A scoped controller's terminal always needs `request` — it is the scope-entry seed.
         let requestName = (hasBinds || scopedSeedType != nil) ? "request" : "_"
@@ -547,7 +548,7 @@ private let routeBindingWrappers: Set<String> = ["Path", "Query", "JSONBody", "H
 /// How an `@ErrorResponse` entry produces the outcome — a bare status (the `(E.self, .status)` form) or a
 /// callable applied to the bound error (an inline `{ (e: E) in … }` closure). File-scope to keep the
 /// generator's nested types one level deep.
-fileprivate enum ErrorResponder {
+private enum ErrorResponder {
     case status(String)  // a status expression, e.g. ".notFound"
     case call(String)  // a callable expression: "({ (e: T) in … })"
 }

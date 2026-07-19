@@ -273,7 +273,9 @@ struct RouteContributorGenerationTests {
         let generated = rendered.source
         // Route closure is folded (through the helper), consulted before the controller's status shorthand.
         let routeCall = generated.range(of: "wireMVCRespond(to: wireMVCError, ({ (e: NotFound) in")
-        let controllerStatus = generated.range(of: "(wireMVCError is NotFound ? WireMVCOutcome.status(.notFound) : nil)")
+        let controllerStatus = generated.range(
+            of: "(wireMVCError is NotFound ? WireMVCOutcome.status(.notFound) : nil)"
+        )
         #expect(routeCall != nil && controllerStatus != nil)
         #expect(routeCall!.lowerBound < controllerStatus!.lowerBound)
         // A closure mapping throws through the helper, so the chain is `try`-prefixed.
@@ -393,7 +395,11 @@ struct RouteContributorGenerationTests {
                 func list() async throws -> [User] { fatalError() }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/users", factoryKeys: [])
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
         #expect(
             rendered.diagnostics.contains {
                 if case .errorResponseClosureNeedsTypedParameter = $0.message { return true } else { return false }
@@ -410,7 +416,11 @@ struct RouteContributorGenerationTests {
                 func list() async throws -> [User] { fatalError() }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/users", factoryKeys: [])
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
         #expect(
             rendered.diagnostics.contains {
                 if case .errorResponseUnresolvedMapping = $0.message { return true } else { return false }
@@ -428,7 +438,11 @@ struct RouteContributorGenerationTests {
                 func list() async throws -> [User] { fatalError() }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/users", factoryKeys: [])
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
         #expect(
             rendered.diagnostics.contains {
                 if case .errorResponseDuplicateType = $0.message { return true } else { return false }
@@ -446,7 +460,11 @@ struct RouteContributorGenerationTests {
                 func list() async throws -> [User] { fatalError() }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/users", factoryKeys: [])
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/users",
+            factoryKeys: []
+        )
         #expect(
             rendered.diagnostics.contains {
                 if case .errorResponseCatchAllNotLast = $0.message { return true } else { return false }
