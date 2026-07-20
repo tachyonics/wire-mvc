@@ -13,6 +13,7 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
     case responseStatusOnValue(String)
     case unsupportedRawParameter(name: String, type: String)
     case rawRouteMissingSender(String)
+    case rawRouteRoleCountMismatch(String, roles: Int, parameters: Int)
     case middlewareFactoryRequiresFactory
     case errorResponseClosureNeedsTypedParameter
     case errorResponseUnresolvedMapping(String)
@@ -32,9 +33,11 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
         case .responseStatusOnValue(let route):
             "@ResponseStatus on '\(route)' requires a Void handler; use @JSONResponse to encode the returned value"
         case .unsupportedRawParameter(let name, let type):
-            "@RawRoute parameter '\(name)' has unsupported type '\(type)' — a raw handler takes HTTPRequest, [String: Substring], the AsyncReader-constrained reader, and/or the HTTPResponseSender-constrained sender"
+            "@RawRoute parameter '\(name)' has a type ('\(type)') that can't be inferred — a bare @RawRoute infers HTTPRequest, [String: Substring], the AsyncReader-constrained reader, and the HTTPResponseSender-constrained sender by type. For a transformed slot (a type a middleware produces, e.g. MultiPartSender<S>), name the roles explicitly: @RawRoute(.role, …), one role per parameter"
         case .rawRouteMissingSender(let route):
-            "@RawRoute handler '\(route)' must take the response sender (a parameter generic over HTTPResponseSender) to write its response"
+            "@RawRoute handler '\(route)' must take the response sender (a parameter generic over HTTPResponseSender, or bound via @RawRoute(.responseSender)) to write its response"
+        case .rawRouteRoleCountMismatch(let route, let roles, let parameters):
+            "@RawRoute(role, …) on '\(route)' lists \(roles) role(s) but the handler has \(parameters) parameter(s) — give exactly one role per parameter, in order"
         case .middlewareFactoryRequiresFactory:
             "@MiddlewareFactory requires @Factory on the same type — it supplies the box-role mapping for a factory template. Add @Factory(key) to make this a Wire factory template."
         case .errorResponseClosureNeedsTypedParameter:
@@ -60,6 +63,7 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
         case .responseStatusOnValue: id = "responseStatusOnValue"
         case .unsupportedRawParameter: id = "unsupportedRawParameter"
         case .rawRouteMissingSender: id = "rawRouteMissingSender"
+        case .rawRouteRoleCountMismatch: id = "rawRouteRoleCountMismatch"
         case .middlewareFactoryRequiresFactory: id = "middlewareFactoryRequiresFactory"
         case .errorResponseClosureNeedsTypedParameter: id = "errorResponseClosureNeedsTypedParameter"
         case .errorResponseUnresolvedMapping: id = "errorResponseUnresolvedMapping"

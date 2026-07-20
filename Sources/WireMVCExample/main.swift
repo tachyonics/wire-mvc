@@ -201,6 +201,19 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         )
     }
 
+    // @RawRoute(.responseSender) + a sender-transforming @Middleware (M5.4R) — the handler receives a
+    // MultiPartSender<S> (a type constraint-inference can't name) and calls its richer sendParts API; the
+    // middleware wrapped the real sender. Removing the middleware would fail to compile at the handler.
+    do {
+        let (status, body) = try await send("GET", "/uploads/parts", port: port)
+        let text = String(decoding: body, as: UTF8.self)
+        check(
+            status == 200 && text.contains("name=\"greeting\"") && text.contains("hello")
+                && text.contains("name=\"name\"") && text.contains("wire"),
+            "@RawRoute(.responseSender)  → sender-transforming middleware; handler used MultiPartSender.sendParts"
+        )
+    }
+
     // WireMVC.mountIntrospection — the graph's wiring model, served over the same router.
     do {
         let (status, body) = try await send("GET", "/wiring", port: port)
