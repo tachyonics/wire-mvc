@@ -199,6 +199,13 @@ try await withThrowingTaskGroup(of: Void.self) { group in
                 && w1.storeShared && w2.storeShared,
             "@Scoped(seed:) @Controller  → request-scoped value (async @Inject init) fresh per request, @Singleton shared"
         )
+        // @Teardown on a request-scoped binding (RequestResource) — the generated witness's async defer runs
+        // the scope teardown after each request, so the probe counts one per /whoami request above (M5.4.5).
+        check(
+            scopeTeardownProbe.load(ordering: .relaxed) >= 2,
+            "@Teardown on a @Scoped binding  → request-scope teardown fired per request "
+                + "(probe counted \(scopeTeardownProbe.load(ordering: .relaxed)))"
+        )
     }
 
     // @RawRoute(.responseSender) + a sender-transforming @Middleware (M5.4R) — the handler receives a

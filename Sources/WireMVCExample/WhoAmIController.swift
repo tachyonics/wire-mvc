@@ -1,4 +1,5 @@
 import HTTPTypes
+import Synchronization
 import Wire
 import WireMVC
 
@@ -6,6 +7,19 @@ import WireMVC
 // controller a *bridge* proxy: it's constructed fresh per request from the request seed (via the
 // plugin-generated `_wireEnterScope` thunk), injecting a request-scoped `RequestInfo` built from that
 // same seed, alongside the app-`@Singleton` `UserStore` (shared across every request).
+
+/// A global probe the request-scoped resource's `@Teardown` bumps, so the self-test can observe that
+/// request-scope teardown actually fires (M5.4.5).
+let scopeTeardownProbe = Atomic<Int>(0)
+
+/// A request-scoped resource carrying a `@Teardown` — verifies request-scope teardown runs per request
+/// (the generated witness's async `defer` over the scope-entry thunk's teardown closure), consistent with
+/// singleton-scope teardown. A real one would be a per-request connection/transaction; this bumps a probe.
+@Scoped(seed: HTTPRequest.self)
+struct RequestResource: Sendable {
+    @Inject init(request: HTTPRequest) {}
+    @Teardown func close() { scopeTeardownProbe.add(1, ordering: .relaxed) }
+}
 
 /// A request-scoped value built from the `HTTPRequest` seed — its `path` reflects the request that
 /// opened the scope, so two requests see two different instances. Its `@Inject init` is **async** and
@@ -32,6 +46,7 @@ struct WhoAmI: Codable, Sendable {
 @Controller("/whoami")
 struct WhoAmIController: Sendable {
     @Inject var info: RequestInfo  // request-scoped — fresh per request, async-constructed
+    @Inject var resource: RequestResource  // request-scoped — @Teardown fires per request (M5.4.5)
     @Inject var store: UserStore  // app singleton — shared
 
     @Get
