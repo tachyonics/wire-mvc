@@ -38,11 +38,11 @@ struct RouteBlockGenerator {
 
     /// The per-request scoped-controller local's name — deliberately `wireMVC`-prefixed so it can't
     /// collide with a handler's decoded parameter locals.
-    private var scopeEntryLocalName: String { "wireMVCController" }
+    private let scopeEntryLocalName = "wireMVCController"
 
     /// The per-request scope-teardown closure's local name — the `@Teardown` walk for the request scope's
     /// own bindings, returned by `_wireEnterScope` alongside the controller (M5.4.5).
-    private var scopeTeardownLocalName: String { "wireMVCScopeTeardown" }
+    private let scopeTeardownLocalName = "wireMVCScopeTeardown"
 
     /// The lines that enter the request scope, prepended to a scoped route's terminal body. `_wireEnterScope`
     /// returns `(controller, teardown)`; the controller is dispatched on, and an **async `defer`** runs the
