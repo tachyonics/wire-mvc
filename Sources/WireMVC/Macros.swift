@@ -93,6 +93,27 @@ public macro ResponseStatus(_ status: HTTPResponse.Status) =
 @attached(peer)
 public macro RawRoute() = #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
 
+/// A raw handler's register-closure primitive, named for `@RawRoute(.role, …)`.
+public enum RawRouteRole: Sendable {
+    case request
+    case requestContext
+    case pathParameters
+    case reader
+    case responseSender
+}
+
+/// The explicit-role raw escape hatch — `@RawRoute(.role, …)` binds the handler's parameters to the
+/// register-closure primitives **positionally by the listed roles**, one role per parameter, instead of
+/// inferring them from the parameter types/constraints. Use it when a parameter's type can't be inferred:
+/// a **transformed slot** whose type a middleware produces — e.g. `responseSender: consuming
+/// MultiPartSender<S>` off a sender-transforming middleware. There is no `as?` rescue for a `consuming`
+/// `~Copyable` value, so a transformed sender/reader/context must be named by role. Naming the transformed
+/// slot also couples the route to its producing middleware at compile time: without the transform, the
+/// register closure's primitive doesn't match the handler's parameter type and the build fails.
+@attached(peer)
+public macro RawRoute(_ roles: RawRouteRole...) =
+    #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
 /// Wrap a route (or, on the controller type, every route) in a `Middleware` resolved from the graph.
 /// `@Middleware(T.self)` folds the `T` binding by type; a generic-with-deps middleware is instead named
 /// by its `@Factory` key (the overload below). The middleware runs before the handler and can transform

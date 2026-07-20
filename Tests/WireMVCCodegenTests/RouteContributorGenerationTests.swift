@@ -551,6 +551,89 @@ struct RouteContributorGenerationTests {
         #expect(rendered.source.contains("try await self._wireSubject.events(responseSender: responseSender)"))
     }
 
+    /// `@RawRoute(.responseSender)` binds the parameter to the register closure's `responseSender` by the
+    /// explicit role — regardless of the parameter's *type*, so a transformed sender (a middleware's
+    /// `MultiPartSender<S>`) that constraint-inference can't name still binds.
+    @Test func rawRouteExplicitResponseSenderRole() {
+        let source = """
+            @Controller("/uploads")
+            struct Uploads {
+                @Post("/multipart")
+                @RawRoute(.responseSender)
+                func upload<Sender: HTTPResponseSender & ~Copyable>(
+                    responseSender: consuming MultiPartSender<Sender>
+                ) async throws where Sender.Writer: ~Copyable {
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/uploads",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(
+            rendered.source.contains(
+                "builder.register(method: .post, path: \"/uploads/multipart\") { _, _, _, _, responseSender in"
+            )
+        )
+        #expect(rendered.source.contains("try await self._wireSubject.upload(responseSender: responseSender)"))
+    }
+
+    /// Multiple explicit roles bind positionally, in order.
+    @Test func rawRouteExplicitRolesBindPositionally() {
+        let source = """
+            @Controller("/uploads")
+            struct Uploads {
+                @Post("/multipart")
+                @RawRoute(.request, .responseSender)
+                func upload<Sender: HTTPResponseSender & ~Copyable>(
+                    _ request: HTTPRequest,
+                    responseSender: consuming MultiPartSender<Sender>
+                ) async throws where Sender.Writer: ~Copyable {
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/uploads",
+            factoryKeys: []
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        // request is used (not `_`) since a role names it; the call binds both by their labels.
+        #expect(
+            rendered.source.contains(
+                "builder.register(method: .post, path: \"/uploads/multipart\") { request, _, _, _, responseSender in"
+            )
+        )
+        #expect(rendered.source.contains("try await self._wireSubject.upload(request, responseSender: responseSender)"))
+    }
+
+    @Test func rawRouteRoleCountMismatchIsDiagnosed() {
+        let source = """
+            @Controller("/uploads")
+            struct Uploads {
+                @Post("/multipart")
+                @RawRoute(.responseSender)
+                func upload<Sender: HTTPResponseSender & ~Copyable>(
+                    _ request: HTTPRequest,
+                    responseSender: consuming MultiPartSender<Sender>
+                ) async throws where Sender.Writer: ~Copyable {
+                }
+            }
+            """
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/uploads",
+            factoryKeys: []
+        )
+        #expect(
+            rendered.diagnostics.contains {
+                if case .rawRouteRoleCountMismatch = $0.message { return true } else { return false }
+            }
+        )
+    }
+
     // MARK: - Subject-accessor seam
 
     /// The witness varies only by the subject accessor — swapping `_wireSubject` for another field leaves
@@ -639,7 +722,7 @@ struct RouteContributorGenerationTests {
         )
         #expect(
             rendered.diagnostics.first?.message.message
-                == "@RawRoute handler 'f' must take the response sender (a parameter generic over HTTPResponseSender) to write its response"
+                == "@RawRoute handler 'f' must take the response sender (a parameter generic over HTTPResponseSender, or bound via @RawRoute(.responseSender)) to write its response"
         )
     }
 

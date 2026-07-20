@@ -132,71 +132,116 @@ extension RouteBlockGenerator {
         return false
     }
 
-    /// The `@RawRoute` register call: pass the register closure's primitives straight to the handler,
-    /// matched by type (`HTTPRequest`, `[String: Substring]`) and by the reader/sender generic
-    /// parameters' constraints (`AsyncReader`/`HTTPResponseSender`). No decode, no encode.
+    /// The `@RawRoute` register call: pass the register closure's primitives straight to the handler. A
+    /// bare `@RawRoute` matches each parameter by type (`HTTPRequest`, `[String: Substring]`) and by the
+    /// reader/sender/context generic parameters' constraints. An explicit `@RawRoute(.role, …)` binds the
+    /// parameters positionally by the listed roles — one role per parameter — so a **transformed slot**
+    /// whose type a middleware produces (e.g. `consuming MultiPartSender<S>`) binds by role rather than by
+    /// an inference that can't name it. No decode, no encode either way.
     fileprivate mutating func rawRouteBlock(
         function: FunctionDeclSyntax,
         verb: Verb,
         path: String,
         middleware: [String]
     ) -> String? {
-        let roles = rawGenericRoles(function)
-        var usesRequest = false
-        var usesContext = false
-        var usesParameters = false
-        var usesReader = false
-        var usesSender = false
+        let params = Array(function.signature.parameterClause.parameters)
         var callArgs: [String] = []
-        for param in function.signature.parameterClause.parameters {
-            let type = strippingOwnership(param.type.trimmedDescription)
-            let canonical = type.filter { !$0.isWhitespace }
-            let registerArgument: String
-            if canonical == "HTTPRequest" {
-                registerArgument = "request"
-                usesRequest = true
-            } else if canonical == "[String:Substring]" {
-                registerArgument = "pathParameters"
-                usesParameters = true
-            } else if roles[type] == .context {
-                registerArgument = "requestContext"
-                usesContext = true
-            } else if roles[type] == .reader {
-                registerArgument = "reader"
-                usesReader = true
-            } else if roles[type] == .sender {
-                registerArgument = "responseSender"
-                usesSender = true
-            } else {
-                let name = (param.secondName ?? param.firstName).text
+        var used: Set<String> = []
+
+        if let explicitRoles = explicitRawRoles(function) {
+            guard explicitRoles.count == params.count else {
                 diagnostics.append(
-                    RouteCodegenDiagnostic(.unsupportedRawParameter(name: name, type: type), at: param)
+                    RouteCodegenDiagnostic(
+                        .rawRouteRoleCountMismatch(
+                            function.name.text,
+                            roles: explicitRoles.count,
+                            parameters: params.count
+                        ),
+                        at: function.name
+                    )
                 )
                 return nil
             }
-            let label = param.firstName.tokenKind == .wildcard ? "" : "\(param.firstName.text): "
-            callArgs.append("\(label)\(registerArgument)")
+            for (param, role) in zip(params, explicitRoles) {
+                guard let primitive = rawPrimitive(forRoleName: role) else {
+                    diagnostics.append(
+                        RouteCodegenDiagnostic(.unsupportedRawParameter(name: role, type: role), at: param)
+                    )
+                    return nil
+                }
+                callArgs.append("\(rawArgumentLabel(param))\(primitive)")
+                used.insert(primitive)
+            }
+        } else {
+            let roles = rawGenericRoles(function)
+            for param in params {
+                let type = strippingOwnership(param.type.trimmedDescription)
+                let canonical = type.filter { !$0.isWhitespace }
+                let primitive: String
+                if canonical == "HTTPRequest" {
+                    primitive = "request"
+                } else if canonical == "[String:Substring]" {
+                    primitive = "pathParameters"
+                } else if roles[type] == .context {
+                    primitive = "requestContext"
+                } else if roles[type] == .reader {
+                    primitive = "reader"
+                } else if roles[type] == .sender {
+                    primitive = "responseSender"
+                } else {
+                    let name = (param.secondName ?? param.firstName).text
+                    diagnostics.append(
+                        RouteCodegenDiagnostic(.unsupportedRawParameter(name: name, type: type), at: param)
+                    )
+                    return nil
+                }
+                callArgs.append("\(rawArgumentLabel(param))\(primitive)")
+                used.insert(primitive)
+            }
         }
-        guard usesSender else {
+
+        guard used.contains("responseSender") else {
             diagnostics.append(
                 RouteCodegenDiagnostic(.rawRouteMissingSender(function.name.text), at: function.name)
             )
             return nil
         }
-        let requestName = usesRequest ? "request" : "_"
-        let contextName = usesContext ? "requestContext" : "_"
-        let parametersName = usesParameters ? "pathParameters" : "_"
-        let readerName = usesReader ? "reader" : "_"
         return emitRegister(
             verb: verb,
             path: path,
             middleware: middleware,
-            requestName: requestName,
-            contextName: contextName,
-            parametersName: parametersName,
-            readerName: readerName,
+            requestName: used.contains("request") ? "request" : "_",
+            contextName: used.contains("requestContext") ? "requestContext" : "_",
+            parametersName: used.contains("pathParameters") ? "pathParameters" : "_",
+            readerName: used.contains("reader") ? "reader" : "_",
             terminalBody: "try await self.\(subjectAccessor).\(function.name.text)(\(callArgs.joined(separator: ", ")))"
         )
+    }
+
+    /// The call-argument label for a raw handler parameter (`""` for a wildcard first name, else `name: `).
+    private func rawArgumentLabel(_ param: FunctionParameterSyntax) -> String {
+        param.firstName.tokenKind == .wildcard ? "" : "\(param.firstName.text): "
+    }
+
+    /// The role names of an explicit `@RawRoute(.role, …)`, or `nil` for a bare `@RawRoute` / `@RawRoute()`
+    /// (which uses type/constraint inference instead).
+    private func explicitRawRoles(_ function: FunctionDeclSyntax) -> [String]? {
+        for case let .attribute(attr) in function.attributes
+        where attr.attributeName.trimmedDescription == "RawRoute" {
+            guard let arguments = attr.arguments?.as(LabeledExprListSyntax.self), !arguments.isEmpty else {
+                return nil
+            }
+            return arguments.compactMap {
+                $0.expression.as(MemberAccessExprSyntax.self)?.declName.baseName.text
+            }
+        }
+        return nil
+    }
+
+    /// The register-closure primitive a `@RawRoute` role names — the role name *is* the primitive name;
+    /// this also validates the role against the known set.
+    private func rawPrimitive(forRoleName role: String) -> String? {
+        ["request", "requestContext", "pathParameters", "reader", "responseSender"].contains(role) ? role : nil
     }
 
     /// Map each handler generic parameter to a raw role by its constraint — `AsyncReader` → reader,
