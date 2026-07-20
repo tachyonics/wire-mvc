@@ -73,7 +73,9 @@ where Reader.ReadElement == UInt8, Reader.FinalElement == HTTPFields?, Sender.Wr
                     request: request,
                     requestContext: requestContext,
                     reader: reader,
-                    responseSender: MultiPartSender(wrapping: responseSender)))
+                    responseSender: MultiPartSender(wrapping: responseSender)
+                )
+            )
         case .responded(let request):
             return try await next(.responded(request: request))
         }

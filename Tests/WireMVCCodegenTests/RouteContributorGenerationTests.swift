@@ -566,7 +566,11 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/uploads", factoryKeys: [])
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/uploads",
+            factoryKeys: []
+        )
         #expect(rendered.diagnostics.isEmpty)
         #expect(
             rendered.source.contains(
@@ -590,7 +594,11 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/uploads", factoryKeys: [])
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/uploads",
+            factoryKeys: []
+        )
         #expect(rendered.diagnostics.isEmpty)
         // request is used (not `_`) since a role names it; the call binds both by their labels.
         #expect(
@@ -614,7 +622,11 @@ struct RouteContributorGenerationTests {
                 }
             }
             """
-        let rendered = renderRouteContributorExtension(controller: controller(source), pathPrefix: "/uploads", factoryKeys: [])
+        let rendered = renderRouteContributorExtension(
+            controller: controller(source),
+            pathPrefix: "/uploads",
+            factoryKeys: []
+        )
         #expect(
             rendered.diagnostics.contains {
                 if case .rawRouteRoleCountMismatch = $0.message { return true } else { return false }

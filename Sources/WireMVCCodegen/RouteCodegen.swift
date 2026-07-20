@@ -152,7 +152,11 @@ extension RouteBlockGenerator {
             guard explicitRoles.count == params.count else {
                 diagnostics.append(
                     RouteCodegenDiagnostic(
-                        .rawRouteRoleCountMismatch(function.name.text, roles: explicitRoles.count, parameters: params.count),
+                        .rawRouteRoleCountMismatch(
+                            function.name.text,
+                            roles: explicitRoles.count,
+                            parameters: params.count
+                        ),
                         at: function.name
                     )
                 )
