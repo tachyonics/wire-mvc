@@ -108,7 +108,14 @@ struct RouteContributorGenerationTests {
             factoryKeys: []
         )
         #expect(rendered.diagnostics.isEmpty)
-        #expect(rendered.source.contains("let wireMVCController = try await self._wireEnterScope(request)"))
+        #expect(
+            rendered.source.contains(
+                "let (wireMVCController, wireMVCScopeTeardown) = try await self._wireEnterScope(request)"
+            )
+        )
+        // The scope's teardown runs on every exit via an async defer (M5.4.5); BasicFormat may reflow the block.
+        #expect(rendered.source.contains("defer {"))
+        #expect(rendered.source.contains("_ = await wireMVCScopeTeardown()"))
         #expect(rendered.source.contains("try await wireMVCController.get(id: id)"))
         #expect(!rendered.source.contains("_wireSubject"))
     }
@@ -379,7 +386,9 @@ struct RouteContributorGenerationTests {
         #expect(rendered.diagnostics.isEmpty)
         let generated = rendered.source
         let doOpen = generated.range(of: "do {")
-        let scopeEntry = generated.range(of: "let wireMVCController = try await self._wireEnterScope(request)")
+        let scopeEntry = generated.range(
+            of: "let (wireMVCController, wireMVCScopeTeardown) = try await self._wireEnterScope(request)"
+        )
         #expect(doOpen != nil && scopeEntry != nil)
         #expect(doOpen!.lowerBound < scopeEntry!.lowerBound)  // scope entry is inside the do
     }

@@ -40,12 +40,24 @@ struct RouteBlockGenerator {
     /// collide with a handler's decoded parameter locals.
     private var scopeEntryLocalName: String { "wireMVCController" }
 
-    /// The line that enters the request scope and constructs the controller, prepended to a scoped
-    /// route's terminal body. The seed is the register closure's `request` (seed-from-`HTTPRequest`).
+    /// The per-request scope-teardown closure's local name — the `@Teardown` walk for the request scope's
+    /// own bindings, returned by `_wireEnterScope` alongside the controller (M5.4.5).
+    private var scopeTeardownLocalName: String { "wireMVCScopeTeardown" }
+
+    /// The lines that enter the request scope, prepended to a scoped route's terminal body. `_wireEnterScope`
+    /// returns `(controller, teardown)`; the controller is dispatched on, and an **async `defer`** runs the
+    /// scope teardown on *every* exit of the enclosing scope (handler return, a mapped/rethrown throw) — and,
+    /// being declared after entry, is skipped when entry itself throws (nothing was constructed). Teardown
+    /// errors are collected by the closure and discarded here (the response is the request's outcome). The
+    /// seed is the register closure's `request` (seed-from-`HTTPRequest`).
     private var scopeEntryProloguePrefix: String {
         scopedSeedType == nil
             ? ""
-            : "let \(scopeEntryLocalName) = try await self.\(contributorProxyScopeEntryAccessor)(request)\n"
+            : """
+            let (\(scopeEntryLocalName), \(scopeTeardownLocalName)) = try await self.\(contributorProxyScopeEntryAccessor)(request)
+            defer { _ = await \(scopeTeardownLocalName)() }
+
+            """
     }
 
     /// The joined `builder.register` blocks for every verb-annotated function on the controller — the
