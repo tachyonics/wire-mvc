@@ -206,6 +206,21 @@ try await withThrowingTaskGroup(of: Void.self) { group in
             "@Teardown on a @Scoped binding  → request-scope teardown fired per request "
                 + "(probe counted \(scopeTeardownProbe.load(ordering: .relaxed)))"
         )
+
+        // Per-root reachability (M5.4.6): OtherController is a *second* @Scoped(seed: HTTPRequest.self)
+        // controller sharing the seed. The two /whoami requests above must have torn down ONLY
+        // WhoAmIController's RequestResource — never the sibling's OtherResource (its thunk isn't run). Then
+        // a /other request tears down only its own OtherResource, leaving WhoAmIController's probe untouched.
+        let whoamiTeardowns = scopeTeardownProbe.load(ordering: .relaxed)
+        let otherBefore = otherTeardownProbe.load(ordering: .relaxed)  // 0 — /whoami never built OtherResource
+        let (otherStatus, _) = try await send("GET", "/other", port: port)
+        check(
+            otherStatus == 200
+                && otherBefore == 0  // per-root: /whoami never constructed or tore down OtherResource
+                && otherTeardownProbe.load(ordering: .relaxed) == otherBefore + 1  // /other tore down its own
+                && scopeTeardownProbe.load(ordering: .relaxed) == whoamiTeardowns,  // ...and not RequestResource
+            "@Scoped per-root reachability (M5.4.6)  → sibling scoped controllers don't cross-construct or cross-teardown"
+        )
     }
 
     // @RawRoute(.responseSender) + a sender-transforming @Middleware (M5.4R) — the handler receives a
