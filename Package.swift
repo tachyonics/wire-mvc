@@ -35,6 +35,10 @@ let package = Package(
     platforms: [.macOS(.v26)],
     products: [
         .library(name: "WireMVC", targets: ["WireMVC"]),
+        // The batteries-included router for the native (proposal-server) path — a concrete
+        // `RoutableHTTPServerBuilder` + `HTTPServerRequestHandler`. Opt-in, so the router-agnostic
+        // core (and the ServerTransport adapter) don't pull it in.
+        .library(name: "WireMVCRouter", targets: ["WireMVCRouter"]),
         .library(name: "WireMVCServerTransport", targets: ["WireMVCServerTransport"]),
         // The adapter-owned build plugin a WireMVC consumer applies (instead of swift-wire's
         // WireBuildPlugin) — it runs WireGen + WireMVCRouteGen, emitting the proxy structs + witnesses.
@@ -122,10 +126,24 @@ let package = Package(
             ],
             swiftSettings: proposalSettings
         ),
+        // The native-path router — concrete `RoutableHTTPServerBuilder` + `HTTPServerRequestHandler`.
+        // The routing algorithm is the non-generic `RouteTable`; `WireRouter` threads the server's
+        // `~Copyable` associated types. What a `@WireMVCBootstrap` `createRoutableBuilder(for:)` returns.
+        .target(
+            name: "WireMVCRouter",
+            dependencies: [
+                "WireMVC",
+                .product(name: "HTTPAPIs", package: "swift-http-api-proposal"),
+                .product(name: "AsyncStreaming", package: "swift-async-algorithms"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+            ],
+            swiftSettings: proposalSettings
+        ),
         .executableTarget(
             name: "WireMVCExample",
             dependencies: [
                 "WireMVC",
+                "WireMVCRouter",
                 .product(name: "Wire", package: "swift-wire"),
                 .product(name: "HTTPAPIs", package: "swift-http-api-proposal"),
                 .product(name: "AsyncStreaming", package: "swift-async-algorithms"),
@@ -134,6 +152,26 @@ let package = Package(
                 .product(name: "NIOHTTPServer", package: "swift-http-server"),
                 .product(name: "Logging", package: "swift-log"),
                 // The generated `_WireGraph: WireMVCComposable` conformance references `any Service`.
+                .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
+            ],
+            swiftSettings: proposalSettings,
+            plugins: [.plugin(name: "WireMVCBuildPlugin")]
+        ),
+        // The WireMVC-native composition root (M5.5). A thin `@Singleton @WireMVCBootstrap` app whose
+        // `@main` is *generated* by `WireMVCRouteGen` — proves the assembly `WireMVCExample` hand-writes
+        // collapses to the macro. Kept separate from `WireMVCExample` (which stays the full-matrix
+        // self-checker); this target's `@main` serves, so its correctness is the compile gate + the
+        // codegen golden test.
+        .executableTarget(
+            name: "WireMVCBootstrapExample",
+            dependencies: [
+                "WireMVC",
+                "WireMVCRouter",
+                .product(name: "Wire", package: "swift-wire"),
+                .product(name: "HTTPAPIs", package: "swift-http-api-proposal"),
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+                .product(name: "NIOHTTPServer", package: "swift-http-server"),
+                .product(name: "Logging", package: "swift-log"),
                 .product(name: "ServiceLifecycle", package: "swift-service-lifecycle"),
             ],
             swiftSettings: proposalSettings,
@@ -185,6 +223,14 @@ let package = Package(
                 .product(name: "SwiftSyntax", package: "swift-syntax"),
                 .product(name: "SwiftParser", package: "swift-syntax"),
             ]
+        ),
+        .testTarget(
+            name: "WireMVCRouterTests",
+            dependencies: [
+                "WireMVCRouter",
+                .product(name: "HTTPTypes", package: "swift-http-types"),
+            ],
+            swiftSettings: proposalSettings
         ),
     ]
 )

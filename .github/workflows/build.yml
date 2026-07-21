@@ -20,7 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Install dependencies
-        run: apt-get update && apt-get install -y libssl-dev
+        # curl: to probe the @WireMVCBootstrap example's server (the slim Swift container lacks it).
+        run: apt-get update && apt-get install -y libssl-dev curl
       - name: Build
         run: swift build
       - name: Run end-to-end example
@@ -28,6 +29,24 @@ jobs:
         # turns them into NIOHTTPServer's request handler and the example drives every route over
         # real HTTP on an ephemeral loopback port. Prints "wire-mvc example OK" or exits non-zero.
         run: swift run WireMVCExample
+      - name: Run @WireMVCBootstrap example (boot, probe, stop)
+        # The generated @main serves indefinitely, so — unlike WireMVCExample — it can't run to
+        # completion. Boot it, poll until it binds, assert one route's response, then stop it. Validates
+        # that the generated composition-root @main bootstraps the graph, constructs AppBootstrap, and
+        # serves the collated HelloController on the WireMVCRouter trie.
+        run: |
+          BIN="$(swift build --show-bin-path)/WireMVCBootstrapExample"
+          "$BIN" &
+          pid=$!
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/hello/ci -o resp.json; then ok=1; break; fi
+            sleep 1
+          done
+          kill "$pid" 2>/dev/null || true
+          [ "$ok" = 1 ] || { echo "WireMVCBootstrapExample did not bind"; exit 1; }
+          cat resp.json; echo
+          grep -q '"message":"Hello, ci!"' resp.json
       - name: Test ServerTransport adapter (trait)
         # The opt-in WireMVCServerTransport adapter is behind the `ServerTransport` trait (which pulls
         # in OpenAPIRuntime); enable it to build the adapter + run its test. The steps above leave the

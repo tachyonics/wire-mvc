@@ -24,7 +24,7 @@ public let wireMVCComposition = WireGraphConformanceV1(
 
 public enum WireMVC {
     /// Register the graph's collated controllers onto a route builder — any
-    /// `RoutableHTTPServerBuilder` (a router, an adapter's builder) — and return the graph's collated
+    /// `HTTPServerRouteBuilder` (a router, an adapter's builder) — and return the graph's collated
     /// app-scoped `ServiceLifecycle` services to hand to the app's `ServiceGroup`. WireMVC stays router-agnostic,
     /// exactly as the old `apply` stayed transport-agnostic over `some ServerTransport`; the concrete
     /// builder — which is also the proposal's `HTTPServerRequestHandler`, so it can serve — is the
@@ -32,7 +32,7 @@ public enum WireMVC {
     ///
     /// ```swift
     /// let graph = try await Wire.bootstrap()
-    /// var router = WireRouter(for: server)   // a concrete RoutableHTTPServerBuilder + handler
+    /// var router = WireRouter(for: server)   // a concrete HTTPServerRouteBuilder + handler
     /// let services = try WireMVC.apply(graph, to: &router)
     /// try await server.serve(handler: router)  // run `services` in a ServiceGroup alongside serving
     /// ```
@@ -40,7 +40,7 @@ public enum WireMVC {
     /// The inverse (`~Copyable`) requirements are restated here because they don't propagate across
     /// the generic boundary on their own.
     @discardableResult
-    public static func apply<Builder: RoutableHTTPServerBuilder>(
+    public static func apply<Builder: HTTPServerRouteBuilder>(
         _ graph: some WireMVCComposable,
         to builder: inout Builder
     ) throws -> [any Service]
@@ -57,8 +57,8 @@ public enum WireMVC {
     }
 
     /// Register a `GET` endpoint serving the graph's wiring model (`introspect()`) as JSON onto a
-    /// router (or any `RoutableHTTPServerBuilder`). The model is encoded once, at mount time.
-    public static func mountIntrospection<Builder: RoutableHTTPServerBuilder>(
+    /// router (or any `HTTPServerRouteBuilder`). The model is encoded once, at mount time.
+    public static func mountIntrospection<Builder: HTTPServerRouteBuilder>(
         for graph: some Introspectable,
         into builder: inout Builder,
         at path: String = "/wiring"

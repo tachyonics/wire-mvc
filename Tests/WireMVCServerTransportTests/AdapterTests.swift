@@ -94,7 +94,7 @@ final class MockTransport: ServerTransport, @unchecked Sendable {
 /// A hand-written `RouteContributor` (what `@Controller` generates) — generic over the builder, its
 /// closures driving the proposal reader/sender.
 struct HelloController: RouteContributor {
-    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+    func registerWireRoutes<Builder: HTTPServerRouteBuilder>(on builder: inout Builder) throws
     where
         Builder.RequestContext: ~Copyable,
         Builder.Reader: ~Copyable,
@@ -135,7 +135,7 @@ actor CountingEventSource {
 struct StreamingController: RouteContributor {
     let source: CountingEventSource
 
-    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+    func registerWireRoutes<Builder: HTTPServerRouteBuilder>(on builder: inout Builder) throws
     where
         Builder.RequestContext: ~Copyable,
         Builder.Reader: ~Copyable,

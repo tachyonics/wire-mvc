@@ -202,9 +202,9 @@ private struct BridgeResponseSender: HTTPResponseSender {
     }
 }
 
-/// The bridge builder: a `RoutableHTTPServerBuilder` whose reader/sender are the copyable bridge types.
+/// The bridge builder: a `HTTPServerRouteBuilder` whose reader/sender are the copyable bridge types.
 /// It accumulates routes, then `apply(to:)` forwards each onto a `ServerTransport`.
-private struct ServerTransportRouteBuilder: RoutableHTTPServerBuilder {
+private struct ServerTransportRouteBuilder: HTTPServerRouteBuilder {
     typealias RequestContext = BridgeRequestContext
     typealias Reader = BridgeReader
     typealias ResponseSender = BridgeResponseSender
@@ -287,7 +287,7 @@ private struct ServerTransportRouteBuilder: RoutableHTTPServerBuilder {
 }
 
 /// Serves proposal-native WireMVC controllers on a `ServerTransport`. The `ServerTransport`-era
-/// counterpart to `WireMVC.apply(_:to:)` (which targets a `RoutableHTTPServerBuilder` directly): a
+/// counterpart to `WireMVC.apply(_:to:)` (which targets a `HTTPServerRouteBuilder` directly): a
 /// Hummingbird/Vapor runtime uses this to serve the *same* controllers a proposal server does.
 public enum WireMVCServerTransport {
     /// Register the graph's collated controllers onto a `ServerTransport` and return the graph's

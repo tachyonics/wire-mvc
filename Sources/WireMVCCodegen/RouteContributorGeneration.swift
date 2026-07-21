@@ -13,7 +13,7 @@ public import SwiftSyntax
 /// requirements that don't propagate across the generic boundary. Shared so the macro's struct member
 /// and the tool's extension member spell it identically.
 private let witnessSignature = """
-    registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+    registerWireRoutes<Builder: HTTPServerRouteBuilder>(on builder: inout Builder) throws
     where
         Builder.RequestContext: ~Copyable,
         Builder.Reader: ~Copyable,
@@ -99,10 +99,15 @@ public func generateRouteContributors(
         (file.path, Parser.parse(source: file.source))
     }
     var factoryKeys: Set<String> = []
+    var bootstraps: [ControllerDeclaration] = []
     for file in parsed {
         imports.formUnion(importDeclarations(of: file.tree))
         factoryKeys.formUnion(factoryTemplateKeys(in: file.tree))
+        bootstraps.append(contentsOf: bootstrapDeclarations(in: file.tree))
     }
+    // The generated `@main` calls `Wire.bootstrap()`, so the consumer module needs `import Wire`
+    // even when no controller source imported it directly.
+    if !bootstraps.isEmpty { imports.insert("import Wire") }
 
     for file in parsed {
         let converter = SourceLocationConverter(fileName: file.path, tree: file.tree)
@@ -134,6 +139,13 @@ public func generateRouteContributors(
     for declaration in extensions.sorted(by: { $0.name < $1.name }) {
         lines.append("")
         lines.append(declaration.source)
+    }
+    // The `@WireMVCBootstrap` composition root's generated `@main` entry point. Exactly one is
+    // expected; if a consumer declares more than one, the first gets the entry (a second `@main`
+    // is a compile error the toolchain reports). Emitted last, at module scope.
+    if let bootstrap = bootstraps.first {
+        lines.append("")
+        lines.append(renderBootstrapEntry(bootstrap: bootstrap))
     }
     lines.append("")
     return (lines.joined(separator: "\n"), located)
