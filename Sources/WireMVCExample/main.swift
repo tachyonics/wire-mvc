@@ -58,9 +58,10 @@ let server = NIOHTTPServer(
     )
 )
 
-var router = WireRouter(for: server)
-let services = try WireMVC.apply(graph, to: &router)
-try WireMVC.mountIntrospection(for: graph, into: &router)
+var builder = TrieRouteBuilder(for: server)
+let services = try WireMVC.apply(graph, to: &builder)
+try WireMVC.mountIntrospection(for: graph, into: &builder)
+let router = builder.finalize()  // build → freeze → serve
 
 try await withThrowingTaskGroup(of: Void.self) { group in
     group.addTask { try await server.serve(handler: router) }

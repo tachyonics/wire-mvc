@@ -40,9 +40,10 @@ func renderBootstrapEntry(bootstrap: ControllerDeclaration) -> String {
                 let graph = try await Wire.bootstrap()
                 let bootstrap = graph.\(property)
                 let server = \(createServerTry)bootstrap.createServer()
-                var builder = bootstrap.createRoutableBuilder(for: server)
+                var builder = bootstrap.createRouteBuilder(for: server)
                 let services = try WireMVC.apply(graph, to: &builder)
-                try await WireMVC.serve(on: server, handler: builder, services: services)
+                let handler = builder.finalize()
+                try await WireMVC.serve(on: server, handler: handler, services: services)
             }
         }
         """

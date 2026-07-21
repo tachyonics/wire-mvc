@@ -30,19 +30,18 @@ struct AppBootstrap {
         )
     }
 
-    // The package-provided `WireRouter` is both a `RoutableHTTPServerBuilder` (so `WireMVC.apply`
-    // registers routes onto it) and an `HTTPServerRequestHandler` (so the server can serve it) — the
-    // `& HTTPServerRequestHandler` in the opaque return is what makes it servable.
-    func createRoutableBuilder<Server: HTTPServer>(
+    // The package-provided `TrieRouteBuilder` is a `FinalizableHTTPServerRouteBuilder`: `WireMVC.apply`
+    // registers routes onto it, and the generated `@main` `finalize()`s it into the immutable
+    // `FrozenTrieRouter` the server serves (build → freeze → serve).
+    func createRouteBuilder<Server: HTTPServer>(
         for server: borrowing Server
-    ) -> some RoutableHTTPServerBuilder<Server.RequestContext, Server.Reader, Server.ResponseSender>
-        & HTTPServerRequestHandler
+    ) -> some FinalizableHTTPServerRouteBuilder<Server.RequestContext, Server.Reader, Server.ResponseSender>
     where
         Server.RequestContext: ~Copyable,
         Server.Reader: ~Copyable,
         Server.ResponseSender: ~Copyable,
         Server.ResponseSender.Writer: ~Copyable
     {
-        WireRouter(for: server)
+        TrieRouteBuilder(for: server)
     }
 }

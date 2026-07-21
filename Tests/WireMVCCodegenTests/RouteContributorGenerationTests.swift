@@ -64,7 +64,7 @@ struct RouteContributorGenerationTests {
         #expect(
             rendered.source == """
                 extension _WireRouteContributor_Todos: RouteContributor {
-                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    func registerWireRoutes<Builder: HTTPServerRouteBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
                         Builder.Reader: ~Copyable,
@@ -109,9 +109,10 @@ struct RouteContributorGenerationTests {
                         let graph = try await Wire.bootstrap()
                         let bootstrap = graph.appBootstrap
                         let server = try bootstrap.createServer()
-                        var builder = bootstrap.createRoutableBuilder(for: server)
+                        var builder = bootstrap.createRouteBuilder(for: server)
                         let services = try WireMVC.apply(graph, to: &builder)
-                        try await WireMVC.serve(on: server, handler: builder, services: services)
+                        let handler = builder.finalize()
+                        try await WireMVC.serve(on: server, handler: handler, services: services)
                     }
                 }
                 """
@@ -200,7 +201,7 @@ struct RouteContributorGenerationTests {
         #expect(
             rendered.source == """
                 extension _WireRouteContributor_C: RouteContributor {
-                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    func registerWireRoutes<Builder: HTTPServerRouteBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
                         Builder.Reader: ~Copyable,
@@ -256,7 +257,7 @@ struct RouteContributorGenerationTests {
         #expect(
             rendered.source == """
                 extension _WireRouteContributor_Search: RouteContributor {
-                    func registerWireRoutes<Builder: RoutableHTTPServerBuilder>(on builder: inout Builder) throws
+                    func registerWireRoutes<Builder: HTTPServerRouteBuilder>(on builder: inout Builder) throws
                     where
                         Builder.RequestContext: ~Copyable,
                         Builder.Reader: ~Copyable,

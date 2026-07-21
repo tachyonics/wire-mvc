@@ -7,7 +7,7 @@ public import HTTPTypes
 /// must match the server's, per `HTTPServer.serve`'s `Handler.Reader == Reader`), so it is never
 /// boxed as `any`. WireMVC stays router-agnostic — it depends only on this protocol; a concrete
 /// builder (also an `HTTPServerRequestHandler`, so it can serve) is supplied by the caller.
-public protocol RoutableHTTPServerBuilder<RequestContext, Reader, ResponseSender> {
+public protocol HTTPServerRouteBuilder<RequestContext, Reader, ResponseSender> {
     associatedtype RequestContext: HTTPServerCapability.RequestContext, ~Copyable
     associatedtype Reader: AsyncReader, ~Copyable, SendableMetatype
     where Reader.ReadElement == UInt8, Reader.FinalElement == HTTPFields?
@@ -31,4 +31,29 @@ public protocol RoutableHTTPServerBuilder<RequestContext, Reader, ResponseSender
                 consuming sending ResponseSender
             ) async throws -> Void
     )
+}
+
+/// A `HTTPServerRouteBuilder` for the native (proposal-server) path that **finalizes** — once all
+/// routes are registered — into an immutable `HTTPServerRequestHandler` to serve. This is the
+/// build → freeze → serve lifecycle: the mutable builder collects routes; `finalize()` compacts them
+/// into an optimized immutable handler (e.g. a frozen trie with binary-searchable literal children). A
+/// `@WireMVCBootstrap` composition root's `createRouteBuilder(for:)` returns one of these; the
+/// generated `@main` registers the collated routes, then `finalize()`s and serves the result. It
+/// refines the router-agnostic core so the `ServerTransport` adapter path (which doesn't serve via
+/// `HTTPServerRequestHandler`) stays unaffected.
+public protocol FinalizableHTTPServerRouteBuilder<RequestContext, Reader, ResponseSender>:
+    HTTPServerRouteBuilder
+{
+    associatedtype ServingHandler: HTTPServerRequestHandler
+    where
+        ServingHandler.RequestContext: ~Copyable,
+        ServingHandler.RequestContext == RequestContext,
+        ServingHandler.Reader: ~Copyable,
+        ServingHandler.Reader == Reader,
+        ServingHandler.ResponseSender: ~Copyable,
+        ServingHandler.ResponseSender == ResponseSender,
+        ServingHandler.ResponseSender.Writer: ~Copyable
+
+    /// Compact the registered routes into the immutable handler that serves them.
+    consuming func finalize() -> ServingHandler
 }

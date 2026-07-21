@@ -1,62 +1,77 @@
-# WireMVCRouter — the native-path router (v1 + hardening backlog)
+# WireMVCRouter — the native-path router (ported trie + hardening backlog)
 
-> **Status:** v1 shipped (promoted from example infra), production hardening tracked below. The
-> batteries-included router for the WireMVC-native (proposal-server) path, so a `@WireMVCBootstrap`
-> composition root's `createRoutableBuilder(for:)` has an obvious thing to return. Opt-in target
-> (`WireMVCRouter`) — the WireMVC core stays router-agnostic (it registers onto *any*
-> `RoutableHTTPServerBuilder`), and the `ServerTransport` adapter path uses the host framework's router.
+> **Status:** shipped — a faithful port of `wire-mvc-examples`' `TrieRouteBuilder`/`FrozenTrieRouter`,
+> refactored around a testable non-generic core. The batteries-included router for the WireMVC-native
+> (proposal-server) path, so a `@WireMVCBootstrap` composition root's `createRoutableBuilder(for:)` has
+> an obvious thing to return. Opt-in target (`WireMVCRouter`) — the WireMVC core stays router-agnostic
+> (it registers onto *any* `RoutableHTTPServerBuilder`), and the `ServerTransport` adapter path uses
+> the host framework's router.
 
 ## Why it exists
 
-`@WireMVCBootstrap` asks the app for `createRoutableBuilder(for:) -> some RoutableHTTPServerBuilder<…>
-& HTTPServerRequestHandler`, but the proposal ships no router (it provides the server + the handler
-protocol; routing is the framework's job). Without a provided router, every native-path app would
-hand-roll or copy one — both examples did. `WireMVCRouter` fills that gap. The `& HTTPServerRequestHandler`
-is load-bearing: `WireMVC.apply` registers routes onto the builder, and `server.serve(handler:)` needs
-the *same* value to be a handler.
+`@WireMVCBootstrap` asks the app for `createRoutableBuilder(for:)`, but the proposal ships no router
+(it provides the server + the handler protocol; routing is the framework's job). Without a provided
+router, every native-path app would hand-roll or copy one — every example did. `WireMVCRouter` fills
+that gap with the trie router already developed in `wire-mvc-examples`.
+
+## The build → freeze → serve lifecycle
+
+The router is a `ServableRoutableHTTPServerBuilder` — the native-path refinement of the core builder
+(defined in `WireMVC/Routing.swift`). Registration and serving are **different types**:
+
+- **`TrieRouteBuilder`** (mutable) — the builder `WireMVC.apply` registers routes onto. `finalize()`
+  compacts it into the immutable handler.
+- **`FrozenTrieRouter`** (immutable) — *is* the proposal's `HTTPServerRequestHandler`; the server serves
+  this. Its literal children are segment-sorted arrays (binary search, no per-request hashing).
+
+The generated `@main` (and `WireMVCExample`'s hand-written assembly) do
+`apply(&builder) → builder.finalize() → serve(handler:)`. The `finalize()` step is **not** on the
+router-agnostic core `RoutableHTTPServerBuilder` — it's on the `ServableRoutableHTTPServerBuilder`
+refinement — because the `ServerTransport` adapter's `ServerTransportRouteBuilder`
+(`WireMVCServerTransport.swift:207`) also conforms to the core protocol but doesn't serve via
+`HTTPServerRequestHandler`; forcing `finalize() -> some HTTPServerRequestHandler` on it would be a
+meaningless conformance.
 
 ## Design
 
-- **`RouteTable`** (non-generic, internal) — the routing algorithm, factored out so it is testable
-  without the proposal's `~Copyable` request/response machinery. Maps `(method, path template)` → a
-  registration index; `resolve(method:path:)` returns the first matching index + bound path parameters.
-  Covered by `WireMVCRouterTests`.
-- **`WireRouter<RequestContext, Reader, ResponseSender>`** (public, generic) — a `RoutableHTTPServerBuilder`
-  *and* `HTTPServerRequestHandler`. Holds a `RouteTable` plus a parallel handler array; `register` appends
-  to both, `handle` resolves via the table and dispatches (or answers `404`). Generic over the server's
-  associated types (`init(for:)` infers them, mirroring the pattern `WireMVC.apply` uses).
+- **`RouteTrie` → `FrozenRouteTrie`** (non-generic, internal) — the trie algorithm, factored out so it
+  is testable without the proposal's `~Copyable` request/response machinery. `RouteTrie.insert` walks a
+  flat node array (literal children in a dictionary, one parameter edge per node) and returns a route
+  index; `freeze()` sorts literal children for binary search; `FrozenRouteTrie.resolve` returns the
+  matched route index + bound `{name}` parameters. Covered by `WireMVCRouterTests` (11 tests).
+- **`TrieRouteBuilder` / `FrozenTrieRouter`** (public, generic over the server's associated types) —
+  wrap the trie with the parallel handler array; `register` inserts + appends, `finalize` freezes +
+  pairs, `handle` resolves + dispatches (or answers `404`).
 
-## v1 semantics (what the tests pin)
+## What ships (what the tests pin)
 
-Linear scan, **first-registered-wins**, `{name}` path parameters, query string stripped before matching,
-exact segment-count match, `404` on no match. Empty path segments are omitted, so `/users/` and `/users`
-are equivalent (no trailing-slash policy yet).
+Segment-trie matching (`O(path length)`), `{name}` path parameters, query stripping, segment-exact
+matching, **literal-before-parameter precedence** (`/users/me` beats `/users/{id}`),
+first-registered-wins per node for the method match, and binary-searched literal children after freeze.
+Empty path segments are omitted, so `/users/` ≡ `/users` (no trailing-slash policy yet).
 
 ## Production hardening backlog
 
-Ordered roughly by value; each is additive over v1 and testable through `RouteTable` first.
+The trie port already covers what were items #1 (radix matching) and part of #3 (literal-before-param).
+What remains, roughly by value; each is additive and testable through `RouteTrie`/`FrozenRouteTrie` first:
 
-1. **Radix/trie matching.** Replace the linear scan (`O(routes × segments)`) with a radix tree
-   (`O(path length)`). The dominant scalability item; `RouteTable`'s API (`add` → index, `resolve` →
-   index + params) is deliberately shaped to swap the internals without touching `WireRouter`.
-2. **405 vs 404.** Today any non-match is `404`. Distinguish "a path matched but not this method" →
-   **`405 Method Not Allowed` with an `Allow` header** listing the methods that *do* match, from "no
-   path matched" → `404`. `resolve` needs to report path-matched-method-mismatched separately.
-3. **Route precedence.** Static segments should beat parameters should beat catch-alls
-   (`/users/me` before `/users/{id}`), independent of registration order — replacing first-wins.
-4. **Catch-all / wildcard params.** `{path*}` capturing the remainder of the path (proxying, static
-   file serving).
-5. **Trailing-slash policy.** A deliberate choice (strict / redirect / lenient) instead of the
+1. **405 vs 404.** Any non-match is `404` today. Distinguish "a path matched but not this method" →
+   **`405 Method Not Allowed` + `Allow`** (a node was reached with routes, none for this method) from
+   "no path matched" → `404`. `resolve` needs to report the node's available methods on a path hit.
+2. **Full precedence.** Literal beats parameter already; add parameter beats catch-all, and make it
+   order-independent (replace first-registered-wins among ambiguous routes).
+3. **Catch-all / wildcard params.** `{path*}` capturing the remainder (proxying, static files).
+4. **Trailing-slash policy.** A deliberate choice (strict / redirect / lenient) instead of the
    incidental "empty segments omitted" behavior.
-6. **Duplicate-route diagnostics.** Two registrations for the same method+template is almost always a
-   bug — surface it (a precondition today only guards index/handler drift).
-7. **Percent-decoding** of path parameters (`/users/a%20b` → `a b`).
-8. **`registerNotFound` fallback slot.** The seam M5.5 Phase 4 needs for the synthetic fallback route
-   (see [../../../swift-wire/Documentation/M5_5_PLAN.md]) — a configurable not-found handler on the
-   builder, mapping to the router's `404` path. Lands with Phase 4.
+5. **Duplicate-route diagnostics.** Two registrations for the same method+template — surface it (a
+   precondition today only guards index/handler drift).
+6. **Percent-decoding** of path parameters (`/users/a%20b` → `a b`).
+7. **`registerNotFound` fallback slot.** The seam M5.5 Phase 4 needs for the synthetic fallback route
+   (see [../../../swift-wire/Documentation/M5_5_PLAN.md]) — a configurable not-found handler mapping to
+   the router's `404` path. Lands with Phase 4.
 
 ## Relationship to M5.5 phases
 
-- **Phase 4** adds `registerNotFound` here (item 8) + the synthetic fallback route.
+- **Phase 4** adds `registerNotFound` here (item 7) + the synthetic fallback route.
 - **Phase 5** (global middleware fold) wraps the router's dispatch; the fold hook lives at the
   serve/assembly layer, but the router is where the matched-vs-synthetic-route decision is made.
