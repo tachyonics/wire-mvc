@@ -3,6 +3,7 @@ import NIOHTTPServer
 import Synchronization  // the middleware probe (Atomic)
 import Wire  // WiringModel (for the /wiring check)
 import WireMVC
+import WireMVCRouter  // the package-provided native router (WireRouter)
 
 #if canImport(FoundationEssentials)
 import FoundationEssentials

@@ -87,6 +87,67 @@ struct RouteContributorGenerationTests {
         )
     }
 
+    // MARK: - @WireMVCBootstrap composition root (M5.5 Phase 1)
+
+    /// The generated `@main` entry: reads the `@WireMVCBootstrap` binding off the graph
+    /// (`graph.appBootstrap`), builds the server + router from its factories, applies the collated
+    /// routes, and serves via `WireMVC.serve`. `createServer` is `throws`, so its call carries `try`.
+    @Test func bootstrapEntryGeneratesMain() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                @Inject let config: ServerConfig
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        #expect(
+            renderBootstrapEntry(bootstrap: controller(source)) == """
+                @main
+                struct _WireMVCBootstrapEntry {
+                    static func main() async throws {
+                        let graph = try await Wire.bootstrap()
+                        let bootstrap = graph.appBootstrap
+                        let server = try bootstrap.createServer()
+                        var builder = bootstrap.createRoutableBuilder(for: server)
+                        let services = try WireMVC.apply(graph, to: &builder)
+                        try await WireMVC.serve(on: server, handler: builder, services: services)
+                    }
+                }
+                """
+        )
+    }
+
+    /// A non-`throws` `createServer` drops the `try` on its call — the entry mirrors the factory's effect.
+    @Test func bootstrapEntryOmitsTryForNonThrowingCreateServer() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() -> NIOHTTPServer { fatalError() }
+            }
+            """
+        #expect(renderBootstrapEntry(bootstrap: controller(source)).contains("let server = bootstrap.createServer()"))
+    }
+
+    /// End to end: `generateRouteContributors` finds `@WireMVCBootstrap`, emits the `@main` entry, and
+    /// adds `import Wire` (the entry calls `Wire.bootstrap()`).
+    @Test func generateEmitsBootstrapEntryAndWireImport() {
+        let source = """
+            import WireMVC
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        let rendered = generateRouteContributors(files: [("App.swift", source)])
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("struct _WireMVCBootstrapEntry {"))
+        #expect(rendered.source.contains("let bootstrap = graph.appBootstrap"))
+        #expect(rendered.source.contains("import Wire\n"))
+    }
+
     @Test func scopedControllerConstructsPerRequestViaScopeEntry() {
         // A `@Scoped(seed:)` controller is a bridge proxy: its witness constructs the controller fresh
         // per request from the proxy's `_wireEnterScope` thunk (seeded by the request), then dispatches

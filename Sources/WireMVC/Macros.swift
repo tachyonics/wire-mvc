@@ -47,6 +47,20 @@ public macro Controller(_ path: String) =
 public macro Controller() =
     #externalMacro(module: "WireMVCMacros", type: "ControllerMacro")
 
+// ── Composition root (`@WireMVCBootstrap`) ──
+
+/// Marks the app's WireMVC-native composition root. A `@Singleton @WireMVCBootstrap` struct whose
+/// `@Inject` properties resolve from the graph and whose `createServer()` /
+/// `createRoutableBuilder(for:)` factories build the concrete server and route builder. The plugin
+/// (`WireMVCRouteGen`) reads the marker and generates the program entry point — a `@main` that
+/// bootstraps the graph, constructs this type, registers the collated routes with `WireMVC.apply`,
+/// and serves the router alongside the collated `ServiceLifecycle` services. `@Singleton` is required
+/// (it makes the type a graph binding, exactly as `@Singleton @Controller` does); the entry point is
+/// generated, not written. A **marker** — it expands to nothing (reuses `RouteMarkerMacro`); the
+/// generated `@main` is emitted into the consumer module. See [Notes/../M5_5_PLAN.md].
+@attached(peer)
+public macro WireMVCBootstrap() = #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
 // ── HTTP verb markers (peer, no-op — read by `@Controller`) ──
 
 @attached(peer)
