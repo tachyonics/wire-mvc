@@ -76,8 +76,13 @@ struct RouteContributorGenerationTests {
                             do {
                                 let id = try await Path<String>.bind(name: "id", request: request, pathParameters: pathParameters, body: nil)
                                 wireMVCOutcome = try WireMVCResponse.json(try await self._wireSubject.get(id: id), status: .ok)
-                            } catch let wireMVCBindingError as WireMVCBindingError {
-                                wireMVCOutcome = .status(wireMVCBindingError.status)
+                            } catch let wireMVCError {
+                                wireMVCOutcome = (
+                                    (wireMVCError as? WireMVCBindingError).map {
+                                        WireMVCOutcome.status($0.status)
+                                    }
+                                    ?? WireMVCOutcome.status(.internalServerError)
+                                )
                             }
                             try await wireMVCOutcome.send(on: responseSender)
                         }
@@ -216,8 +221,12 @@ struct RouteContributorGenerationTests {
                             try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
                                 try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
                                 let wireMVCOutcome: WireMVCOutcome
-                                try await self._wireSubject.f()
-                                wireMVCOutcome = .status(.noContent)
+                                do {
+                                    try await self._wireSubject.f()
+                                    wireMVCOutcome = .status(.noContent)
+                                } catch {
+                                    wireMVCOutcome = WireMVCOutcome.status(.internalServerError)
+                                }
                                 try await wireMVCOutcome.send(on: responseSender)
                                 }
                             }
@@ -274,8 +283,13 @@ struct RouteContributorGenerationTests {
                                 let trace = try await Header<String>.bindOptional(name: "X-Trace", request: request, pathParameters: pathParameters, body: requestBody) ?? "none"
                                 let filter = try await JSONBody<Filter>.bind(name: "filter", request: request, pathParameters: pathParameters, body: requestBody)
                                 wireMVCOutcome = try WireMVCResponse.json(try await self._wireSubject.run(scope: scope, query: query, limit: limit, trace: trace, filter: filter), status: .created)
-                            } catch let wireMVCBindingError as WireMVCBindingError {
-                                wireMVCOutcome = .status(wireMVCBindingError.status)
+                            } catch let wireMVCError {
+                                wireMVCOutcome = (
+                                    (wireMVCError as? WireMVCBindingError).map {
+                                        WireMVCOutcome.status($0.status)
+                                    }
+                                    ?? WireMVCOutcome.status(.internalServerError)
+                                )
                             }
                             try await wireMVCOutcome.send(on: responseSender)
                         }
@@ -307,13 +321,15 @@ struct RouteContributorGenerationTests {
             factoryKeys: []
         )
         #expect(rendered.diagnostics.isEmpty)
-        // No catch-all → guarded assignment that re-throws when nothing matched.
+        // No catch-all → the mapping chain, ending in the built-in 500 terminal (never a rethrow).
         #expect(rendered.source.contains("} catch let wireMVCError {"))
         #expect(rendered.source.contains("(wireMVCError is NotFound ? WireMVCOutcome.status(.notFound) : nil)"))
         // The binding-error built-in is folded in (BasicFormat may reflow the trailing closure).
         #expect(rendered.source.contains("(wireMVCError as? WireMVCBindingError).map"))
         #expect(rendered.source.contains("WireMVCOutcome.status($0.status)"))
-        #expect(rendered.source.contains("throw wireMVCError"))
+        // M5.5 Phase 2: the terminal owns the 500 — an unmapped throw is written, never re-thrown.
+        #expect(rendered.source.contains("?? WireMVCOutcome.status(.internalServerError)"))
+        #expect(!rendered.source.contains("throw wireMVCError"))
         // The shipped binding-only catch is gone once @ErrorResponse is present.
         #expect(!rendered.source.contains("catch let wireMVCBindingError as WireMVCBindingError"))
     }

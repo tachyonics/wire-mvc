@@ -150,8 +150,9 @@ public macro Middleware(_ key: FactoryKey) =
 
 /// Map an error thrown by a route (from the handler, or from a `@Scoped` binding built at scope entry)
 /// to a response, at controller scope (every route) or route scope (one route). Route entries are
-/// consulted before controller entries (route overrides controller); an unmapped throw is re-thrown to
-/// the framework's default (500) — WireMVC synthesises no 500 of its own. A **marker**: the route
+/// consulted before controller entries (route overrides controller); an unmapped throw becomes a
+/// built-in `500` written by the terminal — WireMVC owns the 500, since the server aborts (drops the
+/// connection on) an escaped throw rather than synthesising one. A **marker**: the route
 /// codegen reads the annotation and folds the mapping into the terminal's `catch` — the annotation
 /// expands to nothing. Two forms:
 ///
@@ -163,7 +164,7 @@ public macro Middleware(_ key: FactoryKey) =
 ///
 /// A form whose error type is `Swift.Error` is the **catch-all** — consulted after the built-in
 /// `WireMVCBindingError`→status mapping (so param-decode failures keep their 415/422), before the
-/// final rethrow. At most one catch-all per scope, and it must be the last error entry at its scope.
+/// built-in 500. At most one catch-all per scope, and it must be the last error entry at its scope.
 ///
 /// > A named-function reference (`@ErrorResponse(SomeType.map)`) is **not** supported yet: a reference to
 /// > the annotated controller's own method is a circular macro reference (the compiler can't resolve the

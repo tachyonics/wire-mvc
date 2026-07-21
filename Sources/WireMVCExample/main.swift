@@ -100,6 +100,15 @@ try await withThrowingTaskGroup(of: Void.self) { group in
         )
     }
 
+    // M5.5 Phase 2: the terminal owns the 500. BoomController.boom throws an *unmapped* error (not a
+    // WireMVCBindingError, no @ErrorResponse) — the terminal's catch chain ends in a built-in 500 write,
+    // so the client gets a clean 500 rather than a dropped connection (which is what a rethrow → server
+    // abort produced before Phase 2).
+    do {
+        let (status, _) = try await send("GET", "/boom", port: port)
+        check(status == 500, "GET /boom (unmapped throw)  → 500, terminal owns the 500 (not a dropped connection)")
+    }
+
     // @Post @JSONResponse(status: .created) @JSONBody — 201, JSON in/out
     do {
         let (status, body) = try await send(
