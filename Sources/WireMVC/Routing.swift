@@ -54,6 +54,23 @@ public protocol FinalizableHTTPServerRouteBuilder<RequestContext, Reader, Respon
         ServingHandler.ResponseSender == ResponseSender,
         ServingHandler.ResponseSender.Writer: ~Copyable
 
+    /// Register the fallback handler for **unmatched** requests — what the router dispatches to when no
+    /// route matches (any method, any path), instead of its built-in 404. Same handler shape as
+    /// `register`, with empty path parameters (there is no template). The `@WireMVCBootstrap` generated
+    /// `@main` calls this with the app's `@NotFound` handler (or a synthesized 404) *before* `finalize()`,
+    /// so the fallback is a real route — it folds in the global middleware/error tiers like any other
+    /// (M5.5 Phase 4/5). Unregistered (a hand-written app), the router answers a built-in 404.
+    mutating func registerNotFound(
+        handler:
+            @escaping @Sendable (
+                HTTPRequest,
+                consuming RequestContext,
+                [String: Substring],
+                consuming sending Reader,
+                consuming sending ResponseSender
+            ) async throws -> Void
+    )
+
     /// Compact the registered routes into the immutable handler that serves them.
     consuming func finalize() -> ServingHandler
 }

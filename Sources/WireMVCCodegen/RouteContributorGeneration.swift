@@ -111,25 +111,32 @@ public func generateRouteContributors(
     // Phase 3), folded into every route below. Read once from the first bootstrap found, with its own
     // scope diagnostics (catch-all ordering, duplicate types) located to source.
     var globalErrorMappings: [ErrorMapping] = []
-    var readBootstrapMappings = false
+    var notFoundRegistration = ""  // the generated `builder.registerNotFound { … }` (M5.5 Phase 4)
+    var readBootstrap = false
     for file in parsed {
         imports.formUnion(importDeclarations(of: file.tree))
         factoryKeys.formUnion(factoryTemplateKeys(in: file.tree))
         let fileBootstraps = bootstrapDeclarations(in: file.tree)
         bootstraps.append(contentsOf: fileBootstraps)
-        if !readBootstrapMappings, let bootstrap = fileBootstraps.first {
-            readBootstrapMappings = true
+        if !readBootstrap, let bootstrap = fileBootstraps.first {
+            readBootstrap = true
             let converter = SourceLocationConverter(fileName: file.path, tree: file.tree)
+            func locate(_ diagnostics: [RouteCodegenDiagnostic]) {
+                for diagnostic in diagnostics {
+                    located.append(
+                        LocatedRouteDiagnostic(
+                            message: diagnostic.message,
+                            location: diagnostic.node.startLocation(converter: converter)
+                        )
+                    )
+                }
+            }
             var reader = RouteBlockGenerator(subjectAccessor: "", factoryKeys: [], globalErrorMappings: [])
             globalErrorMappings = reader.errorMappings(from: bootstrap.attributes, scopeLabel: "bootstrap")
-            for diagnostic in reader.diagnostics {
-                located.append(
-                    LocatedRouteDiagnostic(
-                        message: diagnostic.message,
-                        location: diagnostic.node.startLocation(converter: converter)
-                    )
-                )
-            }
+            locate(reader.diagnostics)
+            let notFound = renderNotFoundRegistration(bootstrap: bootstrap)
+            notFoundRegistration = notFound.registration
+            locate(notFound.diagnostics)
         }
     }
     // The generated `@main` calls `Wire.bootstrap()`, so the consumer module needs `import Wire`
@@ -173,7 +180,7 @@ public func generateRouteContributors(
     // is a compile error the toolchain reports). Emitted last, at module scope.
     if let bootstrap = bootstraps.first {
         lines.append("")
-        lines.append(renderBootstrapEntry(bootstrap: bootstrap))
+        lines.append(renderBootstrapEntry(bootstrap: bootstrap, notFoundRegistration: notFoundRegistration))
     }
     lines.append("")
     return (lines.joined(separator: "\n"), located)

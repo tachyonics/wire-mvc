@@ -1,4 +1,6 @@
+import BasicContainers
 import HTTPAPIs
+import HTTPTypes
 import Logging
 import NIOHTTPServer
 import Wire
@@ -44,5 +46,18 @@ struct AppBootstrap {
         Server.ResponseSender.Writer: ~Copyable
     {
         TrieRouteBuilder(for: server)
+    }
+
+    // M5.5 Phase 4: the fallback for unmatched requests — a `@RawRoute` handler that writes the response
+    // itself. Being a Bootstrap method it's DI-capable (it could use `self.config`); the generated `@main`
+    // registers it via `registerNotFound`, before `finalize()`, so it's a real route (the global tiers
+    // fold into it). Without it, the plugin would synthesise a plain 404.
+    @NotFound
+    @RawRoute
+    func handleNotFound<Sender: HTTPResponseSender & ~Copyable & SendableMetatype>(
+        responseSender: consuming Sender
+    ) async throws where Sender.Writer: ~Copyable {
+        var body = UniqueArray<UInt8>(copying: Array("no route here\n".utf8))
+        try await responseSender.sendAndFinish(HTTPResponse(status: .notFound), buffer: &body)
     }
 }

@@ -19,6 +19,7 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
     case errorResponseUnresolvedMapping(String)
     case errorResponseDuplicateType(type: String, scope: String)
     case errorResponseCatchAllNotLast(scope: String)
+    case notFoundNotRaw(String)
 
     public var message: String {
         switch self {
@@ -48,6 +49,8 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
             "@ErrorResponse maps '\(type)' more than once at \(scope) scope — each error type needs a distinct mapping at a scope (a route entry overrides a controller entry for the same type)"
         case .errorResponseCatchAllNotLast(let scope):
             "the @ErrorResponse Swift.Error catch-all must be the last error entry at \(scope) scope — a mapping listed after it can never be reached"
+        case .notFoundNotRaw(let name):
+            "@NotFound handler '\(name)' must be @RawRoute — the fallback writes the response directly (no matched route to decode/encode against). Add @RawRoute and take the response sender."
         }
     }
 
@@ -69,6 +72,7 @@ public enum WireMVCDiagnostic: DiagnosticMessage, Sendable {
         case .errorResponseUnresolvedMapping: id = "errorResponseUnresolvedMapping"
         case .errorResponseDuplicateType: id = "errorResponseDuplicateType"
         case .errorResponseCatchAllNotLast: id = "errorResponseCatchAllNotLast"
+        case .notFoundNotRaw: id = "notFoundNotRaw"
         }
         return MessageID(domain: "WireMVC", id: id)
     }

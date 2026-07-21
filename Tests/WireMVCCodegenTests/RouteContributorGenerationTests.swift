@@ -106,8 +106,10 @@ struct RouteContributorGenerationTests {
                 func createServer() throws -> NIOHTTPServer { fatalError() }
             }
             """
+        let decl = controller(source)
+        let fallback = renderNotFoundRegistration(bootstrap: decl).registration  // no @NotFound → synth-404
         #expect(
-            renderBootstrapEntry(bootstrap: controller(source)) == """
+            renderBootstrapEntry(bootstrap: decl, notFoundRegistration: fallback) == """
                 @main
                 struct _WireMVCBootstrapEntry {
                     static func main() async throws {
@@ -116,6 +118,9 @@ struct RouteContributorGenerationTests {
                         let server = try bootstrap.createServer()
                         var builder = bootstrap.createRouteBuilder(for: server)
                         let services = try WireMVC.apply(graph, to: &builder)
+                        builder.registerNotFound { _, _, _, _, responseSender in
+                            try await responseSender.sendAndFinish(HTTPResponse(status: .notFound))
+                        }
                         let handler = builder.finalize()
                         try await WireMVC.serve(on: server, handler: handler, services: services)
                     }
@@ -133,7 +138,10 @@ struct RouteContributorGenerationTests {
                 func createServer() -> NIOHTTPServer { fatalError() }
             }
             """
-        #expect(renderBootstrapEntry(bootstrap: controller(source)).contains("let server = bootstrap.createServer()"))
+        #expect(
+            renderBootstrapEntry(bootstrap: controller(source), notFoundRegistration: "")
+                .contains("let server = bootstrap.createServer()")
+        )
     }
 
     /// End to end: `generateRouteContributors` finds `@WireMVCBootstrap`, emits the `@main` entry, and
@@ -184,6 +192,49 @@ struct RouteContributorGenerationTests {
         #expect(
             rendered.source.contains("(wireMVCError is TenantMissing ? WireMVCOutcome.status(.badRequest) : nil)")
         )
+    }
+
+    /// M5.5 Phase 4: a `@NotFound @RawRoute` method on the Bootstrap becomes the fallback — the generated
+    /// `@main` registers it via `registerNotFound`, dispatching through the `bootstrap` local (DI-capable).
+    @Test func notFoundHandlerRegistersAsFallback() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+                @NotFound
+                @RawRoute
+                func handleNotFound<Sender: HTTPResponseSender & ~Copyable>(
+                    request: HTTPRequest,
+                    responseSender: consuming sending Sender
+                ) async throws where Sender.Writer: ~Copyable { fatalError() }
+            }
+            """
+        let rendered = generateRouteContributors(files: [("App.swift", source)])
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("builder.registerNotFound"))
+        #expect(
+            rendered.source.contains(
+                "try await bootstrap.handleNotFound(request: request, responseSender: responseSender)"
+            )
+        )
+    }
+
+    /// A `@NotFound` handler that isn't `@RawRoute` is diagnosed — there's no matched route to
+    /// decode/encode against, so the fallback must write the response directly.
+    @Test func notFoundHandlerMustBeRaw() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+                @NotFound
+                @JSONResponse
+                func handleNotFound() -> Greeting { fatalError() }
+            }
+            """
+        let rendered = generateRouteContributors(files: [("App.swift", source)])
+        #expect(rendered.diagnostics.contains { if case .notFoundNotRaw = $0.message { return true } else { return false } })
     }
 
     @Test func scopedControllerConstructsPerRequestViaScopeEntry() {
