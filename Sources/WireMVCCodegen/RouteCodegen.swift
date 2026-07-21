@@ -24,6 +24,11 @@ struct RouteBlockGenerator {
     /// `@Middleware(X)` argument is classified: a key in this set is a factory (its `create` is called
     /// on the lifted `_wireFactory_<key>`); any other key is a graph binding (referenced as `_wire<key>`).
     let factoryKeys: Set<String>
+    /// The `@WireMVCBootstrap` composition root's `@ErrorResponse` entries (M5.5 Phase 3) — the **global
+    /// default tier**, folded into every route's terminal after the controller's own, before the
+    /// binding-error built-in. Empty for the `@Controller` macro path (which has no whole-graph view of
+    /// the Bootstrap); populated by `WireMVCRouteGen`, which reads the Bootstrap once.
+    let globalErrorMappings: [ErrorMapping]
     /// Set for a `@Scoped(seed:)` controller (the seed type): its routes construct the controller fresh
     /// per request from the proxy's `_wireEnterScope` thunk, rather than calling the held `_wireSubject`.
     /// `nil` for an app-scoped (`@Singleton`) controller. Set at the start of `routeBlocks`.
@@ -103,10 +108,12 @@ struct RouteBlockGenerator {
         let hasBinds = !binds.isEmpty
         let call = "try await \(subjectExpression).\(function.name.text)(\(callArgs.joined(separator: ", ")))"
         guard let response = responseComputation(from: function, call: call) else { return nil }
-        // Route-scope `@ErrorResponse` is consulted before the controller's (route overrides controller).
+        // Route-scope `@ErrorResponse` is consulted before the controller's (route overrides controller);
+        // the Bootstrap's global tier is the default, consulted last (M5.5 Phase 3).
         let errorMappings =
             self.errorMappings(from: function.attributes, scopeLabel: "route")
             + controllerErrorMappings
+            + globalErrorMappings
         // A scoped controller's terminal always needs `request` — it is the scope-entry seed.
         let requestName = (hasBinds || scopedSeedType != nil) ? "request" : "_"
         let parametersName = hasBinds ? "pathParameters" : "_"
@@ -594,17 +601,20 @@ private enum ErrorResponder {
     case call(String)  // a callable expression: "({ (e: T) in … })"
 }
 
-extension RouteBlockGenerator {
-    /// One `@ErrorResponse` entry: the error type it matches, whether that type is the `Swift.Error`
-    /// catch-all, and how it produces the outcome — a bare status (the `(E.self, .status)` form) or an
-    /// inline `{ (e: E) in … }` closure applied to the bound error.
-    struct ErrorMapping {
-        let errorType: String
-        let isCatchAll: Bool
-        fileprivate let responder: ErrorResponder
-        var isThrowing: Bool { if case .call = responder { return true } else { return false } }
-    }
+/// One `@ErrorResponse` entry: the error type it matches, whether that type is the `Swift.Error`
+/// catch-all, and how it produces the outcome — a bare status (the `(E.self, .status)` form) or an
+/// inline `{ (e: E) in … }` closure applied to the bound error. Public (top-level, not nested in the
+/// internal `RouteBlockGenerator`) so it can appear in the render functions' signatures — the global
+/// (Bootstrap) tier is threaded to them as `[ErrorMapping]`. Constructed only in this file (its
+/// `responder` is `fileprivate`), so nothing outside the codegen can build one.
+public struct ErrorMapping {
+    let errorType: String
+    let isCatchAll: Bool
+    fileprivate let responder: ErrorResponder
+    var isThrowing: Bool { if case .call = responder { return true } else { return false } }
+}
 
+extension RouteBlockGenerator {
     /// Read the `@ErrorResponse` entries on one scope's attributes (controller or route), in source
     /// order, resolving a static-method reference against the controller declaration. Appends the
     /// duplicate-type and catch-all-ordering diagnostics.

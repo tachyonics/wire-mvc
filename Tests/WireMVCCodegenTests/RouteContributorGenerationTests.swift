@@ -154,6 +154,38 @@ struct RouteContributorGenerationTests {
         #expect(rendered.source.contains("import Wire\n"))
     }
 
+    /// M5.5 Phase 3: the `@WireMVCBootstrap` composition root's `@ErrorResponse` is the global default
+    /// tier — folded into every route's terminal, even a route (and controller) that declares no local
+    /// `@ErrorResponse`. Read once from the Bootstrap; consulted after route/controller, before the 500.
+    @Test func globalErrorResponseFoldsIntoEveryRoute() {
+        let bootstrap = """
+            @Singleton
+            @WireMVCBootstrap
+            @ErrorResponse(TenantMissing.self, .badRequest)
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        let controller = """
+            @Singleton
+            @Controller("/things")
+            struct ThingsController {
+                @Get("/{id}")
+                @JSONResponse
+                func get(@Path id: String) async throws -> Thing { fatalError() }
+            }
+            """
+        let rendered = generateRouteContributors(
+            files: [("Bootstrap.swift", bootstrap), ("Things.swift", controller)]
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        // The route has no local map, but the Bootstrap's global tier folds into its `catch`, ahead of
+        // the binding-error built-in.
+        #expect(
+            rendered.source.contains("(wireMVCError is TenantMissing ? WireMVCOutcome.status(.badRequest) : nil)")
+        )
+    }
+
     @Test func scopedControllerConstructsPerRequestViaScopeEntry() {
         // A `@Scoped(seed:)` controller is a bridge proxy: its witness constructs the controller fresh
         // per request from the proxy's `_wireEnterScope` thunk (seeded by the request), then dispatches
