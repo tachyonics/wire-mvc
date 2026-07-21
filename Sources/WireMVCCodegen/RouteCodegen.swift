@@ -461,11 +461,14 @@ extension RouteBlockGenerator {
     /// The registration closure body. Compute the outcome — collecting the body first when a
     /// `@JSONBody` is present, mapping a `WireMVCBindingError` to its status — then send it once.
     ///
-    /// With no `@ErrorResponse`, the shipped output is preserved verbatim: the scope-entry prologue sits
-    /// outside the `do`, and the `catch` maps only `WireMVCBindingError` (every other throw propagates to
-    /// the framework). With `@ErrorResponse` present, the scope-entry prologue moves *inside* the `do` so
-    /// a throwing request-scoped binding maps like a handler throw, and the `catch` consults the composed
-    /// mappings (route-inner first) → binding-error built-in → `Swift.Error` catch-all → re-throw.
+    /// Every typed terminal wraps its body — the scope-entry prologue (a throwing request-scoped binding),
+    /// the body collect, the parameter binds, and the handler call + response encode — in a single `do`,
+    /// and the `catch` consults the composed mappings (route-inner first) → binding-error built-in →
+    /// `Swift.Error` catch-all → the **built-in 500** (via `errorCatchClause`, which never re-throws). So
+    /// the terminal always holds the sender and writes a response; an unmapped throw is a clean `500`, not
+    /// a dropped connection (M5.5 Phase 2). The `catch` binds `wireMVCError` only when the catch body
+    /// references it (mappings or the binding-error built-in); a pure-500 terminal doesn't, so the
+    /// binding is conditional to avoid an unused-variable warning.
     fileprivate func closureBody(
         hasBinds: Bool,
         hasBody: Bool,
@@ -475,33 +478,14 @@ extension RouteBlockGenerator {
         errorMappings: [ErrorMapping]
     ) -> String {
         let collect = hasBody ? "let requestBody = try await WireMVCRequest.collectBody(reader)\n" : ""
-
-        guard !errorMappings.isEmpty else {
-            guard hasBinds else {
-                return """
-                    \(scopeEntryPrologue)let wireMVCOutcome: WireMVCOutcome
-                    \(response)
-                    try await wireMVCOutcome.send(on: responseSender)
-                    """
-            }
-            return """
-                \(scopeEntryPrologue)let wireMVCOutcome: WireMVCOutcome
-                do {
-                \(collect)\(binds.joined(separator: "\n"))
-                \(response)
-                } catch let wireMVCBindingError as WireMVCBindingError {
-                    wireMVCOutcome = .status(wireMVCBindingError.status)
-                }
-                try await wireMVCOutcome.send(on: responseSender)
-                """
-        }
-
         let bindsBlock = binds.isEmpty ? "" : binds.joined(separator: "\n") + "\n"
+        let referencesError = !errorMappings.isEmpty || hasBinds
+        let catchClause = referencesError ? "} catch let wireMVCError {" : "} catch {"
         return """
             let wireMVCOutcome: WireMVCOutcome
             do {
             \(scopeEntryPrologue)\(collect)\(bindsBlock)\(response)
-            } catch let wireMVCError {
+            \(catchClause)
             \(errorCatchClause(mappings: errorMappings, includeBindingBuiltin: hasBinds))
             }
             try await wireMVCOutcome.send(on: responseSender)
@@ -708,7 +692,12 @@ extension RouteBlockGenerator {
 
     /// The `catch` clause body assigning `wireMVCOutcome` — consult the composed mappings (route-inner
     /// first, already ordered by the caller) → the built-in binding-error status → the `Swift.Error`
-    /// catch-all if present, else re-throw `wireMVCError` out to the framework.
+    /// catch-all if present, else the **built-in 500**. The chain always ends in a non-optional terminal
+    /// (a declared catch-all, or `.status(.internalServerError)`), so the terminal always writes a
+    /// response: the target servers *abort* an escaped throw rather than synthesising a 500, so WireMVC
+    /// owns it (see LinearSenderErrorModel.md / M5.5 Phase 2). An unmapped throw — a handler error, a
+    /// throwing request-scoped binding, or a decode failure with no matching `@ErrorResponse` — becomes a
+    /// clean `500`, not a dropped connection.
     func errorCatchClause(mappings: [ErrorMapping], includeBindingBuiltin: Bool) -> String {
         var elements: [String] = []
         for mapping in mappings where !mapping.isCatchAll {
@@ -717,23 +706,18 @@ extension RouteBlockGenerator {
         if includeBindingBuiltin {
             elements.append("(wireMVCError as? WireMVCBindingError).map { WireMVCOutcome.status($0.status) }")
         }
-        let catchAll = mappings.first { $0.isCatchAll }
-        if let catchAll { elements.append(chainElement(catchAll, terminal: true)) }
+        if let catchAll = mappings.first(where: { $0.isCatchAll }) {
+            elements.append(chainElement(catchAll, terminal: true))
+        } else {
+            elements.append("WireMVCOutcome.status(.internalServerError)")
+        }
 
         let tryPrefix = mappings.contains(where: \.isThrowing) ? "try " : ""
-        let chain = elements.joined(separator: "\n?? ")
-        if catchAll != nil {
-            return "wireMVCOutcome = \(tryPrefix)(\n\(chain)\n)"
+        if elements.count == 1 {
+            return "wireMVCOutcome = \(tryPrefix)\(elements[0])"
         }
-        return """
-            if let wireMVCMapped = \(tryPrefix)(
-            \(chain)
-            ) {
-                wireMVCOutcome = wireMVCMapped
-            } else {
-                throw wireMVCError
-            }
-            """
+        let chain = elements.joined(separator: "\n?? ")
+        return "wireMVCOutcome = \(tryPrefix)(\n\(chain)\n)"
     }
 
     /// One element of the `??` consultation chain. A non-terminal element yields `WireMVCOutcome?`
