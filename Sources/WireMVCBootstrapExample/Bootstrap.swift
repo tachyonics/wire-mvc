@@ -13,6 +13,7 @@ import WireMVCRouter
 
 @Singleton
 @WireMVCBootstrap
+@ErrorResponse(TenantMissing.self, .badRequest)  // global default tier — folds into every route (Phase 3)
 struct AppBootstrap {
     @Inject let config: ServerConfig
 

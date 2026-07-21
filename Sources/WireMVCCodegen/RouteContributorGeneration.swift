@@ -30,9 +30,14 @@ public func renderRegisterWireRoutesWitness(
     controller: ControllerDeclaration,
     pathPrefix: String,
     subjectAccessor: String,
-    factoryKeys: Set<String>
+    factoryKeys: Set<String>,
+    globalErrorMappings: [ErrorMapping] = []
 ) -> (witness: String, diagnostics: [RouteCodegenDiagnostic]) {
-    var generator = RouteBlockGenerator(subjectAccessor: subjectAccessor, factoryKeys: factoryKeys)
+    var generator = RouteBlockGenerator(
+        subjectAccessor: subjectAccessor,
+        factoryKeys: factoryKeys,
+        globalErrorMappings: globalErrorMappings
+    )
     let body = generator.routeBlocks(of: controller, pathPrefix: pathPrefix)
     let witness = """
         \(access)func \(witnessSignature)
@@ -51,14 +56,16 @@ public func renderRegisterWireRoutesWitness(
 public func renderRouteContributorExtension(
     controller: ControllerDeclaration,
     pathPrefix: String,
-    factoryKeys: Set<String>
+    factoryKeys: Set<String>,
+    globalErrorMappings: [ErrorMapping] = []
 ) -> (source: String, diagnostics: [RouteCodegenDiagnostic]) {
     let rendered = renderRegisterWireRoutesWitness(
         access: controller.access,
         controller: controller,
         pathPrefix: pathPrefix,
         subjectAccessor: contributorProxySubjectAccessor,
-        factoryKeys: factoryKeys
+        factoryKeys: factoryKeys,
+        globalErrorMappings: globalErrorMappings
     )
     let raw = """
         extension \(controller.proxyTypeName): RouteContributor {
@@ -100,10 +107,30 @@ public func generateRouteContributors(
     }
     var factoryKeys: Set<String> = []
     var bootstraps: [ControllerDeclaration] = []
+    // The `@WireMVCBootstrap` composition root's `@ErrorResponse` is the global default error tier (M5.5
+    // Phase 3), folded into every route below. Read once from the first bootstrap found, with its own
+    // scope diagnostics (catch-all ordering, duplicate types) located to source.
+    var globalErrorMappings: [ErrorMapping] = []
+    var readBootstrapMappings = false
     for file in parsed {
         imports.formUnion(importDeclarations(of: file.tree))
         factoryKeys.formUnion(factoryTemplateKeys(in: file.tree))
-        bootstraps.append(contentsOf: bootstrapDeclarations(in: file.tree))
+        let fileBootstraps = bootstrapDeclarations(in: file.tree)
+        bootstraps.append(contentsOf: fileBootstraps)
+        if !readBootstrapMappings, let bootstrap = fileBootstraps.first {
+            readBootstrapMappings = true
+            let converter = SourceLocationConverter(fileName: file.path, tree: file.tree)
+            var reader = RouteBlockGenerator(subjectAccessor: "", factoryKeys: [], globalErrorMappings: [])
+            globalErrorMappings = reader.errorMappings(from: bootstrap.attributes, scopeLabel: "bootstrap")
+            for diagnostic in reader.diagnostics {
+                located.append(
+                    LocatedRouteDiagnostic(
+                        message: diagnostic.message,
+                        location: diagnostic.node.startLocation(converter: converter)
+                    )
+                )
+            }
+        }
     }
     // The generated `@main` calls `Wire.bootstrap()`, so the consumer module needs `import Wire`
     // even when no controller source imported it directly.
@@ -117,7 +144,8 @@ public func generateRouteContributors(
             let rendered = renderRouteContributorExtension(
                 controller: found.declaration,
                 pathPrefix: found.pathPrefix,
-                factoryKeys: factoryKeys
+                factoryKeys: factoryKeys,
+                globalErrorMappings: globalErrorMappings
             )
             extensions.append((found.declaration.name, rendered.source))
             for diagnostic in rendered.diagnostics {
