@@ -15,16 +15,16 @@
 /// `sending` — which is what lets a folded terminal hand them to another `HTTPServerRequestHandler` (the
 /// front-layer global-middleware wrapper's call to `router.handle`).
 struct WireDisconnected<Value: ~Copyable>: ~Copyable, Sendable {
-    nonisolated(unsafe) var _value: Value
+    nonisolated(unsafe) var wrapped: Value
 
     /// Wrap an already-disconnected (`sending`) value.
     init(_ value: consuming sending Value) {
-        self._value = value
+        self.wrapped = value
     }
 
     /// Consume the wrapper, handing the value back out as `sending` (still disconnected).
     consuming func take() -> sending Value {
-        let value = consume _value
+        let value = consume wrapped
         return value
     }
 }

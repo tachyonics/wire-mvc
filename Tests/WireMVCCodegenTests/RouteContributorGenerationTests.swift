@@ -149,7 +149,9 @@ struct RouteContributorGenerationTests {
         )
         #expect(rendered.diagnostics.isEmpty)
         #expect(rendered.source.contains("extension _WireGlobalMiddleware_AppBootstrap {"))
-        #expect(rendered.source.contains("func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>(_ inner: Handler)"))
+        #expect(
+            rendered.source.contains("func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>(_ inner: Handler)")
+        )
         #expect(rendered.source.contains("GlobalMiddlewareHandler(inner: inner, chain: wireCompose {"))
         #expect(
             rendered.source.contains(
