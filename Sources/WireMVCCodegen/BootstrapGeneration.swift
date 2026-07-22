@@ -38,10 +38,15 @@ func renderBootstrapEntry(
     let property = graphBindingPropertyName(bootstrap.name)
     let proxyProperty = graphBindingPropertyName(globalMiddlewareProxyTypeName(bootstrap.name))
     let createServerTry = functionThrows(named: "createServer", in: bootstrap) ? "try " : ""
-    let mountIntrospection = introspectionMount(bootstrap: bootstrap, factoryKeys: factoryKeys, proxyProperty: proxyProperty)
+    let mountIntrospection = introspectionMount(
+        bootstrap: bootstrap,
+        factoryKeys: factoryKeys,
+        proxyProperty: proxyProperty
+    )
     // Pre-finalize registrations (introspection mount + `@NotFound` fallback), combined so an absent mount
     // adds no blank line to the entry.
-    let registrations = mountIntrospection.isEmpty ? notFoundRegistration : "\(mountIntrospection)\n\(notFoundRegistration)"
+    let registrations =
+        mountIntrospection.isEmpty ? notFoundRegistration : "\(mountIntrospection)\n\(notFoundRegistration)"
     // The finalized router is wrapped once in the global-middleware front layer: the keyless proxy's
     // `wrapGlobalMiddleware` folds the Bootstrap's `@Middleware` factories around every request — matched
     // routes and the `@NotFound` fallback alike — or returns the router unchanged (identity) when there are
@@ -103,10 +108,10 @@ private func renderWrapGlobalMiddleware(access: String, constructions: [String])
         constructions.isEmpty
         ? "inner"
         : """
-            GlobalMiddlewareHandler(inner: inner, chain: wireCompose {
-            \(constructions.joined(separator: "\n"))
-            })
-            """
+        GlobalMiddlewareHandler(inner: inner, chain: wireCompose {
+        \(constructions.joined(separator: "\n"))
+        })
+        """
     return """
         \(access)func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>(_ inner: Handler)
         -> some HTTPServerRequestHandler<Handler.RequestContext, Handler.Reader, Handler.ResponseSender>

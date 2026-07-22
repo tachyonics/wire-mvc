@@ -160,7 +160,9 @@ struct RouteContributorGenerationTests {
             }
             """
         #expect(
-            !renderBootstrapEntry(bootstrap: controller(source), notFoundRegistration: "", factoryKeys: []).contains("mountIntrospection")
+            !renderBootstrapEntry(bootstrap: controller(source), notFoundRegistration: "", factoryKeys: []).contains(
+                "mountIntrospection"
+            )
         )
     }
 
