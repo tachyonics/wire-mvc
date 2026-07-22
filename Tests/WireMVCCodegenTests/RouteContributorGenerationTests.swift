@@ -234,7 +234,9 @@ struct RouteContributorGenerationTests {
             }
             """
         let rendered = generateRouteContributors(files: [("App.swift", source)])
-        #expect(rendered.diagnostics.contains { if case .notFoundNotRaw = $0.message { return true } else { return false } })
+        #expect(
+            rendered.diagnostics.contains { if case .notFoundNotRaw = $0.message { return true } else { return false } }
+        )
     }
 
     @Test func scopedControllerConstructsPerRequestViaScopeEntry() {
