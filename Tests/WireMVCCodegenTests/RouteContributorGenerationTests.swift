@@ -109,7 +109,7 @@ struct RouteContributorGenerationTests {
         let decl = controller(source)
         let fallback = renderNotFoundRegistration(bootstrap: decl).registration  // no @NotFound → synth-404
         #expect(
-            renderBootstrapEntry(bootstrap: decl, notFoundRegistration: fallback) == """
+            renderBootstrapEntry(bootstrap: decl, notFoundRegistration: fallback, factoryKeys: []) == """
                 @main
                 struct _WireMVCBootstrapEntry {
                     static func main() async throws {
@@ -128,6 +128,97 @@ struct RouteContributorGenerationTests {
                 }
                 """
         )
+    }
+
+    /// A `mountIntrospectionAt() -> String?` method makes the generated `@main` register the graph's wiring
+    /// model (`introspect()` JSON) at the returned path — before `finalize()`, so it's a real route.
+    @Test func bootstrapEntryMountsIntrospection() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+                func mountIntrospectionAt() -> String? { "/wiring" }
+            }
+            """
+        let rendered = renderBootstrapEntry(bootstrap: controller(source), notFoundRegistration: "", factoryKeys: [])
+        #expect(rendered.contains("if let wireMVCIntrospectionPath = bootstrap.mountIntrospectionAt() {"))
+        #expect(
+            rendered.contains(
+                "try WireMVC.mountIntrospection(for: graph, into: &builder, at: wireMVCIntrospectionPath)"
+            )
+        )
+    }
+
+    /// No `mountIntrospectionAt` method → no introspection mount in the entry.
+    @Test func bootstrapEntryOmitsIntrospectionWhenAbsent() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        #expect(
+            !renderBootstrapEntry(bootstrap: controller(source), notFoundRegistration: "", factoryKeys: []).contains(
+                "mountIntrospection"
+            )
+        )
+    }
+
+    /// A `@Middleware`-guarded `mountIntrospectionAt` folds the guard around the introspection route: the
+    /// proxy gains `registerIntrospection` folding the guard factory, and the `@main` calls it (precomputing
+    /// the model once) instead of `WireMVC.mountIntrospection`. The guard factory is already on the proxy —
+    /// the plugin reattributes the method-level `@Middleware` exactly as it does route-scope middleware.
+    @Test func guardedIntrospectionFoldsGuardMiddleware() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+                @Middleware(AdminKeys.gate)
+                func mountIntrospectionAt() -> String? { "/wiring" }
+            }
+            """
+        let decl = controller(source)
+        let factoryKeys: Set<String> = ["AdminKeys.gate"]
+
+        let entry = renderBootstrapEntry(bootstrap: decl, notFoundRegistration: "", factoryKeys: factoryKeys)
+        #expect(
+            entry.contains(
+                "let wireMVCIntrospectionResponse = try WireMVCResponse.json(graph.introspect(), status: .ok)"
+            )
+        )
+        #expect(
+            entry.contains(
+                "graph._WireGlobalMiddleware_AppBootstrap.registerIntrospection(into: &builder, at: wireMVCIntrospectionPath, response: wireMVCIntrospectionResponse)"
+            )
+        )
+        #expect(!entry.contains("WireMVC.mountIntrospection"))
+
+        let ext = renderGlobalMiddlewareProxyExtension(bootstrap: decl, factoryKeys: factoryKeys)
+        #expect(ext.diagnostics.isEmpty)
+        #expect(ext.source.contains("func registerIntrospection<Builder: HTTPServerRouteBuilder>("))
+        #expect(
+            ext.source.contains(
+                "self._wireFactory_AdminKeys_gate.create(Builder.RequestContext.self, Builder.Reader.self, Builder.ResponseSender.self)"
+            )
+        )
+        #expect(ext.source.contains("try await response.send(on: responseSender)"))
+    }
+
+    /// No guard → the proxy has no `registerIntrospection` (the unguarded mount uses `WireMVC.mountIntrospection`).
+    @Test func unguardedIntrospectionOmitsRegisterIntrospection() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+                func mountIntrospectionAt() -> String? { "/wiring" }
+            }
+            """
+        let ext = renderGlobalMiddlewareProxyExtension(bootstrap: controller(source), factoryKeys: [])
+        #expect(!ext.source.contains("registerIntrospection"))
     }
 
     /// M5.5 Phase 5: the global-middleware proxy's `wrapGlobalMiddleware<Handler>` folds the Bootstrap's
@@ -212,7 +303,7 @@ struct RouteContributorGenerationTests {
             }
             """
         #expect(
-            renderBootstrapEntry(bootstrap: controller(source), notFoundRegistration: "")
+            renderBootstrapEntry(bootstrap: controller(source), notFoundRegistration: "", factoryKeys: [])
                 .contains("let server = bootstrap.createServer()")
         )
     }
