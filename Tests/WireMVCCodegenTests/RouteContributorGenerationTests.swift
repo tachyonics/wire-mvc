@@ -122,11 +122,84 @@ struct RouteContributorGenerationTests {
                             try await responseSender.sendAndFinish(HTTPResponse(status: .notFound))
                         }
                         let handler = builder.finalize()
-                        try await WireMVC.serve(on: server, handler: handler, services: services)
+                        let wireMVCServed = graph._WireGlobalMiddleware_AppBootstrap.wrapGlobalMiddleware(handler)
+                        try await WireMVC.serve(on: server, handler: wireMVCServed, services: services)
                     }
                 }
                 """
         )
+    }
+
+    /// M5.5 Phase 5: the global-middleware proxy's `wrapGlobalMiddleware<Handler>` folds the Bootstrap's
+    /// factory `@Middleware`s around the router via `GlobalMiddlewareHandler`, each `.create`d at the
+    /// handler's box types. Two compose in written order.
+    @Test func globalMiddlewareProxyWrapsRouterWithFactories() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            @Middleware(LoggingKeys.accessLog)
+            @Middleware(LoggingKeys.requestID)
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        let rendered = renderGlobalMiddlewareProxyExtension(
+            bootstrap: controller(source),
+            factoryKeys: ["LoggingKeys.accessLog", "LoggingKeys.requestID"]
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("extension _WireGlobalMiddleware_AppBootstrap {"))
+        #expect(
+            rendered.source.contains("func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>(_ inner: Handler)")
+        )
+        #expect(rendered.source.contains("GlobalMiddlewareHandler(inner: inner, chain: wireCompose {"))
+        #expect(
+            rendered.source.contains(
+                "self._wireFactory_LoggingKeys_accessLog.create(Handler.RequestContext.self, Handler.Reader.self, Handler.ResponseSender.self)"
+            )
+        )
+        #expect(
+            rendered.source.contains(
+                "self._wireFactory_LoggingKeys_requestID.create(Handler.RequestContext.self, Handler.Reader.self, Handler.ResponseSender.self)"
+            )
+        )
+    }
+
+    /// No global `@Middleware` → the proxy's `wrapGlobalMiddleware` degrades to identity (`inner`), so the
+    /// `@main` calls it uniformly. No `GlobalMiddlewareHandler`.
+    @Test func globalMiddlewareProxyIdentityWhenEmpty() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        let rendered = renderGlobalMiddlewareProxyExtension(bootstrap: controller(source), factoryKeys: [])
+        #expect(rendered.diagnostics.isEmpty)
+        #expect(rendered.source.contains("func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>"))
+        #expect(!rendered.source.contains("GlobalMiddlewareHandler"))
+    }
+
+    /// A by-type (or keyed-binding) global middleware is diagnosed — only the factory form composes in the
+    /// non-transforming generic wrap. The fold degrades to identity (nothing valid to compose).
+    @Test func globalMiddlewareByTypeFormIsDiagnosed() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            @Middleware(AccessLog.self)
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        let rendered = renderGlobalMiddlewareProxyExtension(bootstrap: controller(source), factoryKeys: [])
+        #expect(rendered.diagnostics.count == 1)
+        #expect(!rendered.source.contains("GlobalMiddlewareHandler"))
+        if case .globalMiddlewareUnsupportedArgument(let reference) = rendered.diagnostics.first?.message {
+            #expect(reference == "AccessLog.self")
+        } else {
+            Issue.record("expected globalMiddlewareUnsupportedArgument")
+        }
     }
 
     /// A non-`throws` `createServer` drops the `try` on its call — the entry mirrors the factory's effect.

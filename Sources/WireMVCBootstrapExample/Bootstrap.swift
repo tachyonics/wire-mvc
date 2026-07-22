@@ -16,6 +16,7 @@ import WireMVCRouter
 @Singleton
 @WireMVCBootstrap
 @ErrorResponse(TenantMissing.self, .badRequest)  // global default tier — folds into every route (Phase 3)
+@Middleware(AccessLogKeys.factory)  // global front layer — wraps every request incl. the 404 fallback (Phase 5)
 struct AppBootstrap {
     @Inject let config: ServerConfig
 
