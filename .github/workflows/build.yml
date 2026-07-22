@@ -46,12 +46,16 @@ jobs:
           # /hello/tenant throws an unmapped-locally error → the Bootstrap's global @ErrorResponse
           # (Phase 3) maps it to 400. -o /dev/null since curl -f already fails on non-2xx.
           tenant=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/hello/tenant)
+          # An unmatched path → the @NotFound fallback (Phase 4): a custom 404 with "no route here".
+          notfound=$(curl -s -w ' [%{http_code}]' http://127.0.0.1:8080/nope)
           kill "$pid" 2>/dev/null || true
           [ "$ok" = 1 ] || { echo "WireMVCBootstrapExample did not bind"; exit 1; }
           cat resp.json; echo
           grep -q '"message":"Hello, ci!"' resp.json
           echo "GET /hello/tenant → $tenant (expect 400, global @ErrorResponse)"
           [ "$tenant" = 400 ] || { echo "global @ErrorResponse tier did not map to 400"; exit 1; }
+          echo "GET /nope → $notfound (expect the @NotFound fallback: 404 + 'no route here')"
+          case "$notfound" in *"no route here"*"[404]") ;; *) echo "@NotFound fallback did not fire"; exit 1;; esac
       - name: Test ServerTransport adapter (trait)
         # The opt-in WireMVCServerTransport adapter is behind the `ServerTransport` trait (which pulls
         # in OpenAPIRuntime); enable it to build the adapter + run its test. The steps above leave the

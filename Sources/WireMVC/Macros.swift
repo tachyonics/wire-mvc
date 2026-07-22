@@ -61,6 +61,17 @@ public macro Controller() =
 @attached(peer)
 public macro WireMVCBootstrap() = #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
 
+/// Marks a method on the `@WireMVCBootstrap` composition root as the **fallback** handler for unmatched
+/// requests (any method, any path) — the router dispatches to it instead of its built-in 404. It uses
+/// the same annotations a route handler does (in practice `@RawRoute`, to write the response directly);
+/// `@Path` is unavailable (there's no matched template). The generated `@main` registers it via
+/// `registerNotFound` *before* `finalize()`, so it's a real route — the global middleware/error tiers
+/// fold into it (M5.5 Phase 4/5), and being DI-capable it can use the Bootstrap's `@Inject`ed deps. If
+/// no method carries `@NotFound`, the plugin synthesises a plain 404 fallback (still fold-able). A
+/// **marker** — it expands to nothing; the plugin reads it.
+@attached(peer)
+public macro NotFound() = #externalMacro(module: "WireMVCMacros", type: "RouteMarkerMacro")
+
 // ── HTTP verb markers (peer, no-op — read by `@Controller`) ──
 
 @attached(peer)

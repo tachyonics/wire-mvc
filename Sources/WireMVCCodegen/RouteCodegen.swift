@@ -163,6 +163,27 @@ extension RouteBlockGenerator {
         path: String,
         middleware: [String]
     ) -> String? {
+        guard let mapping = rawCallArgs(function) else { return nil }
+        return emitRegister(
+            verb: verb,
+            path: path,
+            middleware: middleware,
+            requestName: mapping.used.contains("request") ? "request" : "_",
+            contextName: mapping.used.contains("requestContext") ? "requestContext" : "_",
+            parametersName: mapping.used.contains("pathParameters") ? "pathParameters" : "_",
+            readerName: mapping.used.contains("reader") ? "reader" : "_",
+            terminalBody:
+                "try await self.\(subjectAccessor).\(function.name.text)(\(mapping.callArgs.joined(separator: ", ")))"
+        )
+    }
+
+    /// The raw-route role mapping: for each handler parameter, the register-closure primitive it binds
+    /// to (explicit `@RawRoute(.role, …)` or inferred by type/constraint), plus which primitives are
+    /// used. Shared by `rawRouteBlock` (routes) and `notFoundRegistration` (the `@NotFound` fallback).
+    /// `nil` with a diagnostic on an unbindable parameter or a missing response sender.
+    private mutating func rawCallArgs(
+        _ function: FunctionDeclSyntax
+    ) -> (callArgs: [String], used: Set<String>)? {
         let params = Array(function.signature.parameterClause.parameters)
         var callArgs: [String] = []
         var used: Set<String> = []
@@ -225,15 +246,29 @@ extension RouteBlockGenerator {
             )
             return nil
         }
-        return emitRegister(
-            verb: verb,
-            path: path,
-            middleware: middleware,
-            requestName: used.contains("request") ? "request" : "_",
-            contextName: used.contains("requestContext") ? "requestContext" : "_",
-            parametersName: used.contains("pathParameters") ? "pathParameters" : "_",
-            readerName: used.contains("reader") ? "reader" : "_",
-            terminalBody: "try await self.\(subjectAccessor).\(function.name.text)(\(callArgs.joined(separator: ", ")))"
+        return (callArgs, used)
+    }
+
+    /// The `builder.registerNotFound { … }` for a `@NotFound` handler method (M5.5 Phase 4), called
+    /// through `subjectExpression` (the generated `@main`'s `bootstrap` local — not `self`). In practice
+    /// the method is `@RawRoute` (it writes the response directly); the raw role mapping is reused, so a
+    /// `@NotFound @RawRoute func handleNotFound(request:, responseSender:)` binds exactly like a route.
+    /// `nil` with a diagnostic if the mapping fails (e.g. no response sender).
+    mutating func notFoundRegistration(function: FunctionDeclSyntax, subjectExpression: String) -> String? {
+        guard hasRawRoute(function) else {
+            diagnostics.append(RouteCodegenDiagnostic(.notFoundNotRaw(function.name.text), at: function.name))
+            return nil
+        }
+        guard let mapping = rawCallArgs(function) else { return nil }
+        return emitRegisterClosure(
+            registerCall: "builder.registerNotFound",
+            middleware: [],
+            requestName: mapping.used.contains("request") ? "request" : "_",
+            contextName: mapping.used.contains("requestContext") ? "requestContext" : "_",
+            parametersName: "_",
+            readerName: mapping.used.contains("reader") ? "reader" : "_",
+            terminalBody:
+                "try await \(subjectExpression).\(function.name.text)(\(mapping.callArgs.joined(separator: ", ")))"
         )
     }
 
@@ -312,9 +347,33 @@ extension RouteBlockGenerator {
         readerName: String,
         terminalBody: String
     ) -> String {
+        emitRegisterClosure(
+            registerCall: "builder.register(method: \(verb.method), path: \"\(path)\")",
+            middleware: middleware,
+            requestName: requestName,
+            contextName: contextName,
+            parametersName: parametersName,
+            readerName: readerName,
+            terminalBody: terminalBody
+        )
+    }
+
+    /// The register-closure emission, shared by `builder.register(method:path:)` (routes) and
+    /// `builder.registerNotFound` (the `@NotFound` fallback, M5.5 Phase 4) — the closure body is
+    /// identical; only the call that takes it differs. `registerCall` is everything up to the trailing
+    /// closure.
+    fileprivate func emitRegisterClosure(
+        registerCall: String,
+        middleware: [String],
+        requestName: String,
+        contextName: String,
+        parametersName: String,
+        readerName: String,
+        terminalBody: String
+    ) -> String {
         guard !middleware.isEmpty else {
             return """
-                builder.register(method: \(verb.method), path: "\(path)") { \(requestName), \(contextName), \(parametersName), \(readerName), responseSender in
+                \(registerCall) { \(requestName), \(contextName), \(parametersName), \(readerName), responseSender in
                 \(terminalBody)
                 }
                 """
@@ -324,7 +383,7 @@ extension RouteBlockGenerator {
         // `middlewareConstructions`.
         let fold = middleware.joined(separator: "\n")
         return """
-            builder.register(method: \(verb.method), path: "\(path)") { request, requestContext, \(parametersName), reader, responseSender in
+            \(registerCall) { request, requestContext, \(parametersName), reader, responseSender in
                 let wireMVCBaseBox = RequestResponseMiddlewareBox.pending(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
                 let wireMVCChain = wireCompose {
             \(fold)

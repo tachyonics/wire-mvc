@@ -66,12 +66,16 @@ What remains, roughly by value; each is additive and testable through `RouteTrie
 5. **Duplicate-route diagnostics.** Two registrations for the same method+template — surface it (a
    precondition today only guards index/handler drift).
 6. **Percent-decoding** of path parameters (`/users/a%20b` → `a b`).
-7. **`registerNotFound` fallback slot.** The seam M5.5 Phase 4 needs for the synthetic fallback route
-   (see [../../../swift-wire/Documentation/M5_5_PLAN.md]) — a configurable not-found handler mapping to
-   the router's `404` path. Lands with Phase 4.
+
+**Shipped since v1:** `registerNotFound(handler:)` (M5.5 Phase 4) — `TrieRouteBuilder` stores one
+optional fallback handler, `FrozenTrieRouter` dispatches to it on a miss (the built-in 404 is the
+never-registered safety net). It's on the `FinalizableHTTPServerRouteBuilder` refinement, so a
+`@WireMVCBootstrap`'s generated `@main` registers the app's `@NotFound` handler (or a synthesized 404)
+before `finalize()`.
 
 ## Relationship to M5.5 phases
 
-- **Phase 4** adds `registerNotFound` here (item 7) + the synthetic fallback route.
-- **Phase 5** (global middleware fold) wraps the router's dispatch; the fold hook lives at the
-  serve/assembly layer, but the router is where the matched-vs-synthetic-route decision is made.
+- **Phase 4** added `registerNotFound` here; the generated `@main` registers the `@NotFound` fallback
+  handler (or a synth-404) so it's a real route.
+- **Phase 5** (global middleware fold) folds the global `@Middleware` into every route *including* the
+  fallback — so global concerns (access log, CORS) wrap the 404 too.

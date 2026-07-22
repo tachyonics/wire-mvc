@@ -34,6 +34,9 @@ where
 
     private var trie = RouteTrie()
     private var handlers: [Handler] = []
+    /// The fallback dispatched to on an unmatched request (M5.5 Phase 4). `nil` until `registerNotFound`;
+    /// the frozen router answers a built-in 404 when it stays `nil`.
+    private var notFoundHandler: Handler?
 
     public init() {}
 
@@ -63,9 +66,13 @@ where
         handlers.append(handler)
     }
 
+    public mutating func registerNotFound(handler: @escaping Handler) {
+        notFoundHandler = handler
+    }
+
     /// Freeze the trie and pair it with the handler array — the immutable handler the server serves.
     public consuming func finalize() -> FrozenTrieRouter<RequestContext, Reader, ResponseSender> {
-        FrozenTrieRouter(trie: trie.freeze(), handlers: handlers)
+        FrozenTrieRouter(trie: trie.freeze(), handlers: handlers, notFoundHandler: notFoundHandler)
     }
 }
 
@@ -84,6 +91,9 @@ where
 {
     let trie: FrozenRouteTrie
     let handlers: [TrieRouteBuilder<RequestContext, Reader, ResponseSender>.Handler]
+    /// The fallback for unmatched requests; the built-in 404 below is used only when it's `nil` (an app
+    /// that never called `registerNotFound`).
+    let notFoundHandler: TrieRouteBuilder<RequestContext, Reader, ResponseSender>.Handler?
 
     public func handle(
         request: HTTPRequest,
@@ -92,9 +102,13 @@ where
         responseSender: consuming sending ResponseSender
     ) async throws {
         // Resolve without consuming, so the reader and sender are consumed exactly once — by the
-        // matched handler, or by the 404.
+        // matched handler, the fallback, or the built-in 404.
         guard let matched = trie.resolve(method: request.method, path: request.path ?? "/") else {
-            try await responseSender.sendAndFinish(HTTPResponse(status: .notFound))
+            if let notFoundHandler {
+                try await notFoundHandler(request, requestContext, [:], reader, responseSender)
+            } else {
+                try await responseSender.sendAndFinish(HTTPResponse(status: .notFound))
+            }
             return
         }
         try await handlers[matched.index](request, requestContext, matched.parameters, reader, responseSender)
