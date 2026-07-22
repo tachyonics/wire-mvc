@@ -30,9 +30,17 @@ func graphBindingPropertyName(_ typeName: String) -> String {
 /// explicit threading); only the service run is factored into the non-generic `WireMVC.runServices`.
 /// `createServer` may throw (building a server configuration conventionally does), so the call is
 /// prefixed with `try` when the declaration is `throws`.
-func renderBootstrapEntry(bootstrap: ControllerDeclaration, notFoundRegistration: String) -> String {
+func renderBootstrapEntry(
+    bootstrap: ControllerDeclaration,
+    notFoundRegistration: String
+) -> String {
     let property = graphBindingPropertyName(bootstrap.name)
+    let proxyProperty = graphBindingPropertyName(globalMiddlewareProxyTypeName(bootstrap.name))
     let createServerTry = functionThrows(named: "createServer", in: bootstrap) ? "try " : ""
+    // The finalized router is wrapped once in the global-middleware front layer: the keyless proxy's
+    // `wrapGlobalMiddleware` folds the Bootstrap's `@Middleware` factories around every request — matched
+    // routes and the `@NotFound` fallback alike — or returns the router unchanged (identity) when there are
+    // none. Always called, so the `@main` is uniform.
     let raw = """
         @main
         struct \(bootstrapEntryTypeName) {
@@ -44,11 +52,88 @@ func renderBootstrapEntry(bootstrap: ControllerDeclaration, notFoundRegistration
                 let services = try WireMVC.apply(graph, to: &builder)
                 \(notFoundRegistration)
                 let handler = builder.finalize()
-                try await WireMVC.serve(on: server, handler: handler, services: services)
+                let wireMVCServed = graph.\(proxyProperty).wrapGlobalMiddleware(handler)
+                try await WireMVC.serve(on: server, handler: wireMVCServed, services: services)
             }
         }
         """
     return Parser.parse(source: raw).formatted().description
+}
+
+/// The keyless global-middleware proxy type synthesised for a `@WireMVCBootstrap` root —
+/// `_WireGlobalMiddleware_<name>`. The prefix is `wireMVCBootstrapAlias`'s `proxyTypePrefix`, so the
+/// plugin-synthesised proxy binding and this tool's extension name the same type (mirrors
+/// `ControllerDeclaration.proxyTypeName`'s relationship to `wireMVCControllerAlias`).
+func globalMiddlewareProxyTypeName(_ bootstrapName: String) -> String {
+    "_WireGlobalMiddleware_\(bootstrapName)"
+}
+
+/// The `extension _WireGlobalMiddleware_<Bootstrap>` carrying `wrapGlobalMiddleware<Handler>` — the front
+/// layer's fold. Mirrors the controller proxy's `registerWireRoutes` witness: the plugin emits the proxy
+/// struct (holding the reattributed `@Middleware` factories), this emits the method folding them around the
+/// router via `GlobalMiddlewareHandler`. No global `@Middleware` → identity (`inner`), so the `@main` calls
+/// it uniformly. Any by-type/keyed diagnostics ride out through `diagnostics`.
+func renderGlobalMiddlewareProxyExtension(
+    bootstrap: ControllerDeclaration,
+    factoryKeys: Set<String>
+) -> (source: String, diagnostics: [RouteCodegenDiagnostic]) {
+    let global = globalMiddlewareConstructions(bootstrap: bootstrap, factoryKeys: factoryKeys)
+    let body: String
+    if global.constructions.isEmpty {
+        body = "inner"
+    } else {
+        let fold = global.constructions.joined(separator: "\n")
+        body = """
+            GlobalMiddlewareHandler(inner: inner, chain: wireCompose {
+            \(fold)
+            })
+            """
+    }
+    let raw = """
+        extension \(globalMiddlewareProxyTypeName(bootstrap.name)) {
+            \(bootstrap.access)func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>(_ inner: Handler)
+            -> some HTTPServerRequestHandler<Handler.RequestContext, Handler.Reader, Handler.ResponseSender>
+            where
+                Handler.RequestContext: ~Copyable,
+                Handler.Reader: ~Copyable,
+                Handler.ResponseSender: ~Copyable,
+                Handler.ResponseSender.Writer: ~Copyable
+            {
+                \(body)
+            }
+        }
+        """
+    return (Parser.parse(source: raw).formatted().description, global.diagnostics)
+}
+
+/// The fold-entry constructions for the Bootstrap's global `@Middleware`, read for the proxy's
+/// `wrapGlobalMiddleware<Handler>` method. Only the **factory** form (`@Middleware(Key)`, generic over the
+/// box) is valid at global scope — `self._wireFactory_<key>.create(Handler.RequestContext.self, …)` produces
+/// a middleware over the router's box, composing in the non-transforming generic chain. A by-type
+/// `@Middleware(T.self)` or a keyed graph binding is a concrete `Box<Fixed>` middleware that can't compose
+/// there, so it is diagnosed (``WireMVCDiagnostic/globalMiddlewareUnsupportedArgument``).
+func globalMiddlewareConstructions(
+    bootstrap: ControllerDeclaration,
+    factoryKeys: Set<String>
+) -> (constructions: [String], diagnostics: [RouteCodegenDiagnostic]) {
+    var constructions: [String] = []
+    var diagnostics: [RouteCodegenDiagnostic] = []
+    for case let .attribute(attr) in bootstrap.attributes
+    where attr.attributeName.trimmedDescription == "Middleware" {
+        guard
+            let arguments = attr.arguments?.as(LabeledExprListSyntax.self),
+            let first = arguments.first
+        else { continue }
+        let expression = first.expression.trimmedDescription
+        if factoryKeys.contains(expression) {
+            constructions.append(
+                "self.\(factoryPropertyName(forKey: expression)).create(Handler.RequestContext.self, Handler.Reader.self, Handler.ResponseSender.self)"
+            )
+        } else {
+            diagnostics.append(RouteCodegenDiagnostic(.globalMiddlewareUnsupportedArgument(expression), at: attr))
+        }
+    }
+    return (constructions, diagnostics)
 }
 
 /// The `builder.registerNotFound { … }` for a `@WireMVCBootstrap`'s fallback (M5.5 Phase 4): the

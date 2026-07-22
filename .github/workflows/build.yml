@@ -36,7 +36,9 @@ jobs:
         # serves the collated HelloController on the WireMVCRouter trie.
         run: |
           BIN="$(swift build --show-bin-path)/WireMVCBootstrapExample"
-          "$BIN" &
+          # Line-buffer stdout so the global middleware's `access:` prints reach the log as each request is
+          # handled (block-buffered stdout to a file wouldn't flush before the server is killed).
+          stdbuf -oL "$BIN" > serverlog.txt 2>&1 &
           pid=$!
           ok=0
           for _ in $(seq 1 30); do
@@ -56,6 +58,12 @@ jobs:
           [ "$tenant" = 400 ] || { echo "global @ErrorResponse tier did not map to 400"; exit 1; }
           echo "GET /nope → $notfound (expect the @NotFound fallback: 404 + 'no route here')"
           case "$notfound" in *"no route here"*"[404]") ;; *) echo "@NotFound fallback did not fire"; exit 1;; esac
+          # Phase 5: the global @Middleware (the AccessLog factory) folds around EVERY request via the
+          # generated global-middleware proxy's wrapGlobalMiddleware — matched routes and the @NotFound miss
+          # alike. Its `access:` line must appear for both a matched route and the miss.
+          echo "=== server access log ==="; grep '^access:' serverlog.txt || true
+          grep -q '^access: GET /hello/ci' serverlog.txt || { echo "global @Middleware did not run on a matched route"; exit 1; }
+          grep -q '^access: GET /nope' serverlog.txt || { echo "global @Middleware did not run on the miss"; exit 1; }
       - name: Test ServerTransport adapter (trait)
         # The opt-in WireMVCServerTransport adapter is behind the `ServerTransport` trait (which pulls
         # in OpenAPIRuntime); enable it to build the adapter + run its test. The steps above leave the

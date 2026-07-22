@@ -49,6 +49,20 @@ public macro Controller() =
 
 // ── Composition root (`@WireMVCBootstrap`) ──
 
+/// Tells WireGen to synthesise a **keyless global-middleware proxy** for the `@WireMVCBootstrap` root:
+/// `_WireGlobalMiddleware_<Bootstrap>` reattributes the root's global `@Middleware` factories onto itself
+/// (factory synthesis lands `_wireFactory_<key>` on the proxy, not the root — which, being a plain user
+/// struct, has no such field) but contributes to no multibinding — a standalone, directly-addressable
+/// binding. `WireMVCRouteGen` emits a generic `wrapGlobalMiddleware` method on it (the front layer folds
+/// those factories around the router), and the generated `@main` reads `graph._WireGlobalMiddleware_<Bootstrap>`.
+/// This is the `@Controller` proxy machinery with no contribution; it lets `@Middleware` mean one thing at
+/// route, controller, and global scope, the scope set by placement — as `@ErrorResponse` already is. WireGen
+/// discovers this via `wireMVCBootstrapAlias`; the macro below stays a no-op marker.
+public let wireMVCBootstrapAlias = WireAdapterAnnotationV1(
+    annotation: "WireMVCBootstrap",
+    capability: .liftsPeersToProxy(proxyTypePrefix: "_WireGlobalMiddleware_", proxyScope: .singleton)
+)
+
 /// Marks the app's WireMVC-native composition root. A `@Singleton @WireMVCBootstrap` struct whose
 /// `@Inject` properties resolve from the graph and whose `createServer()` /
 /// `createRouteBuilder(for:)` factories build the concrete server and route builder. The plugin

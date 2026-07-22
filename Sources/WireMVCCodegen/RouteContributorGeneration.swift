@@ -112,6 +112,9 @@ public func generateRouteContributors(
     // scope diagnostics (catch-all ordering, duplicate types) located to source.
     var globalErrorMappings: [ErrorMapping] = []
     var notFoundRegistration = ""  // the generated `builder.registerNotFound { … }` (M5.5 Phase 4)
+    // The bootstrap's file converter, kept so the global-middleware proxy extension — rendered after the
+    // first loop, when the full `factoryKeys` set is known — can locate its diagnostics (M5.5 Phase 5).
+    var bootstrapConverter: SourceLocationConverter?
     var readBootstrap = false
     for file in parsed {
         imports.formUnion(importDeclarations(of: file.tree))
@@ -121,6 +124,7 @@ public func generateRouteContributors(
         if !readBootstrap, let bootstrap = fileBootstraps.first {
             readBootstrap = true
             let converter = SourceLocationConverter(fileName: file.path, tree: file.tree)
+            bootstrapConverter = converter
             func locate(_ diagnostics: [RouteCodegenDiagnostic]) {
                 for diagnostic in diagnostics {
                     located.append(
@@ -179,6 +183,22 @@ public func generateRouteContributors(
     // expected; if a consumer declares more than one, the first gets the entry (a second `@main`
     // is a compile error the toolchain reports). Emitted last, at module scope.
     if let bootstrap = bootstraps.first {
+        // The keyless global-middleware proxy's `wrapGlobalMiddleware` extension (M5.5 Phase 5) — rendered
+        // here so it sees the full `factoryKeys` set (a global `@Middleware(key)` may reference a factory
+        // declared in any file). The `@main` calls it on `graph._WireGlobalMiddleware_<Bootstrap>`.
+        let proxyExtension = renderGlobalMiddlewareProxyExtension(bootstrap: bootstrap, factoryKeys: factoryKeys)
+        if let converter = bootstrapConverter {
+            for diagnostic in proxyExtension.diagnostics {
+                located.append(
+                    LocatedRouteDiagnostic(
+                        message: diagnostic.message,
+                        location: diagnostic.node.startLocation(converter: converter)
+                    )
+                )
+            }
+        }
+        lines.append("")
+        lines.append(proxyExtension.source)
         lines.append("")
         lines.append(renderBootstrapEntry(bootstrap: bootstrap, notFoundRegistration: notFoundRegistration))
     }
