@@ -49,6 +49,13 @@ struct AppBootstrap {
         TrieRouteBuilder(for: server)
     }
 
+    // M5.5: mount the graph's wiring model (`introspect()` as JSON) at `/wiring`. Returning `nil` skips it.
+    // The generated `@main` registers it before `finalize()`, so it's a real route (the front layer wraps it).
+    // The route-scoped `@Middleware` guards *only* `/wiring` (folded via the proxy's `registerIntrospection`),
+    // unlike the global `@Middleware(AccessLogKeys.factory)` on the type.
+    @Middleware(IntrospectionGuardKeys.factory)
+    func mountIntrospectionAt() -> String? { "/wiring" }
+
     // M5.5 Phase 4: the fallback for unmatched requests — a `@RawRoute` handler that writes the response
     // itself. Being a Bootstrap method it's DI-capable (it could use `self.config`); the generated `@main`
     // registers it via `registerNotFound`, before `finalize()`, so it's a real route (the global tiers

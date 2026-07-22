@@ -240,7 +240,11 @@ private func bootstrapArtifacts(
             )
         }
     }
-    let entry = renderBootstrapEntry(bootstrap: bootstrap, notFoundRegistration: notFoundRegistration)
+    let entry = renderBootstrapEntry(
+        bootstrap: bootstrap,
+        notFoundRegistration: notFoundRegistration,
+        factoryKeys: factoryKeys
+    )
     return ([proxyExtension.source, entry], diagnostics)
 }
 

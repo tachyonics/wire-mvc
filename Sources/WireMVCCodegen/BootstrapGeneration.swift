@@ -32,11 +32,16 @@ func graphBindingPropertyName(_ typeName: String) -> String {
 /// prefixed with `try` when the declaration is `throws`.
 func renderBootstrapEntry(
     bootstrap: ControllerDeclaration,
-    notFoundRegistration: String
+    notFoundRegistration: String,
+    factoryKeys: Set<String>
 ) -> String {
     let property = graphBindingPropertyName(bootstrap.name)
     let proxyProperty = graphBindingPropertyName(globalMiddlewareProxyTypeName(bootstrap.name))
     let createServerTry = functionThrows(named: "createServer", in: bootstrap) ? "try " : ""
+    let mountIntrospection = introspectionMount(bootstrap: bootstrap, factoryKeys: factoryKeys, proxyProperty: proxyProperty)
+    // Pre-finalize registrations (introspection mount + `@NotFound` fallback), combined so an absent mount
+    // adds no blank line to the entry.
+    let registrations = mountIntrospection.isEmpty ? notFoundRegistration : "\(mountIntrospection)\n\(notFoundRegistration)"
     // The finalized router is wrapped once in the global-middleware front layer: the keyless proxy's
     // `wrapGlobalMiddleware` folds the Bootstrap's `@Middleware` factories around every request — matched
     // routes and the `@NotFound` fallback alike — or returns the router unchanged (identity) when there are
@@ -50,7 +55,7 @@ func renderBootstrapEntry(
                 let server = \(createServerTry)bootstrap.createServer()
                 var builder = bootstrap.createRouteBuilder(for: server)
                 let services = try WireMVC.apply(graph, to: &builder)
-                \(notFoundRegistration)
+                \(registrations)
                 let handler = builder.finalize()
                 let wireMVCServed = graph.\(proxyProperty).wrapGlobalMiddleware(handler)
                 try await WireMVC.serve(on: server, handler: wireMVCServed, services: services)
@@ -68,57 +73,141 @@ func globalMiddlewareProxyTypeName(_ bootstrapName: String) -> String {
     "_WireGlobalMiddleware_\(bootstrapName)"
 }
 
-/// The `extension _WireGlobalMiddleware_<Bootstrap>` carrying `wrapGlobalMiddleware<Handler>` — the front
-/// layer's fold. Mirrors the controller proxy's `registerWireRoutes` witness: the plugin emits the proxy
-/// struct (holding the reattributed `@Middleware` factories), this emits the method folding them around the
-/// router via `GlobalMiddlewareHandler`. No global `@Middleware` → identity (`inner`), so the `@main` calls
-/// it uniformly. Any by-type/keyed diagnostics ride out through `diagnostics`.
+/// The `extension _WireGlobalMiddleware_<Bootstrap>`: `wrapGlobalMiddleware<Handler>` (the front layer's
+/// fold) always, plus `registerIntrospection<Builder>` when a `@Middleware`-guarded `mountIntrospectionAt` is
+/// present. Both fold factories the plugin already lifted onto the proxy (the reattributed type-level *and*
+/// method-level `@Middleware`), mirroring the controller proxy's `registerWireRoutes`. By-type/keyed
+/// diagnostics ride out through `diagnostics`.
 func renderGlobalMiddlewareProxyExtension(
     bootstrap: ControllerDeclaration,
     factoryKeys: Set<String>
 ) -> (source: String, diagnostics: [RouteCodegenDiagnostic]) {
     let global = globalMiddlewareConstructions(bootstrap: bootstrap, factoryKeys: factoryKeys)
-    let body: String
-    if global.constructions.isEmpty {
-        body = "inner"
-    } else {
-        let fold = global.constructions.joined(separator: "\n")
-        body = """
-            GlobalMiddlewareHandler(inner: inner, chain: wireCompose {
-            \(fold)
-            })
-            """
+    let guardChain = introspectionGuardConstructions(bootstrap: bootstrap, factoryKeys: factoryKeys)
+    var methods = [renderWrapGlobalMiddleware(access: bootstrap.access, constructions: global.constructions)]
+    if !guardChain.constructions.isEmpty {
+        methods.append(renderRegisterIntrospection(access: bootstrap.access, constructions: guardChain.constructions))
     }
     let raw = """
         extension \(globalMiddlewareProxyTypeName(bootstrap.name)) {
-            \(bootstrap.access)func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>(_ inner: Handler)
-            -> some HTTPServerRequestHandler<Handler.RequestContext, Handler.Reader, Handler.ResponseSender>
-            where
-                Handler.RequestContext: ~Copyable,
-                Handler.Reader: ~Copyable,
-                Handler.ResponseSender: ~Copyable,
-                Handler.ResponseSender.Writer: ~Copyable
-            {
-                \(body)
-            }
+        \(methods.joined(separator: "\n\n"))
         }
         """
-    return (Parser.parse(source: raw).formatted().description, global.diagnostics)
+    return (Parser.parse(source: raw).formatted().description, global.diagnostics + guardChain.diagnostics)
 }
 
-/// The fold-entry constructions for the Bootstrap's global `@Middleware`, read for the proxy's
-/// `wrapGlobalMiddleware<Handler>` method. Only the **factory** form (`@Middleware(Key)`, generic over the
-/// box) is valid at global scope — `self._wireFactory_<key>.create(Handler.RequestContext.self, …)` produces
-/// a middleware over the router's box, composing in the non-transforming generic chain. A by-type
-/// `@Middleware(T.self)` or a keyed graph binding is a concrete `Box<Fixed>` middleware that can't compose
-/// there, so it is diagnosed (``WireMVCDiagnostic/globalMiddlewareUnsupportedArgument``).
+/// `wrapGlobalMiddleware<Handler>` — folds the global `@Middleware` chain around the router via
+/// `GlobalMiddlewareHandler`, or returns `inner` (identity) when there are none.
+private func renderWrapGlobalMiddleware(access: String, constructions: [String]) -> String {
+    let body =
+        constructions.isEmpty
+        ? "inner"
+        : """
+            GlobalMiddlewareHandler(inner: inner, chain: wireCompose {
+            \(constructions.joined(separator: "\n"))
+            })
+            """
+    return """
+        \(access)func wrapGlobalMiddleware<Handler: HTTPServerRequestHandler>(_ inner: Handler)
+        -> some HTTPServerRequestHandler<Handler.RequestContext, Handler.Reader, Handler.ResponseSender>
+        where
+            Handler.RequestContext: ~Copyable,
+            Handler.Reader: ~Copyable,
+            Handler.ResponseSender: ~Copyable,
+            Handler.ResponseSender.Writer: ~Copyable
+        {
+            \(body)
+        }
+        """
+}
+
+/// `registerIntrospection<Builder>` — registers the introspection route (its precomputed JSON `response`)
+/// with the `@Middleware`-guard chain folded around it, so only requests the guard passes reach the model.
+/// Emitted only when `mountIntrospectionAt` carries a `@Middleware`.
+private func renderRegisterIntrospection(access: String, constructions: [String]) -> String {
+    """
+    \(access)func registerIntrospection<Builder: HTTPServerRouteBuilder>(
+        into builder: inout Builder,
+        at path: String,
+        response: WireMVCOutcome
+    )
+    where
+        Builder.RequestContext: ~Copyable,
+        Builder.Reader: ~Copyable,
+        Builder.ResponseSender: ~Copyable,
+        Builder.ResponseSender.Writer: ~Copyable
+    {
+        builder.register(method: .get, path: path) { request, requestContext, _, reader, responseSender in
+            let wireMVCBaseBox = RequestResponseMiddlewareBox.pending(request: request, requestContext: requestContext, reader: reader, responseSender: responseSender)
+            let wireMVCChain = wireCompose {
+            \(constructions.joined(separator: "\n"))
+            }
+            try await wireMVCChain.intercept(input: wireMVCBaseBox) { wireMVCFinalBox in
+                try await wireMVCFinalBox.withPendingContents { _, _, _, responseSender in
+                    try await response.send(on: responseSender)
+                }
+            }
+        }
+    }
+    """
+}
+
+/// The `@main`'s introspection registration for a Bootstrap with `mountIntrospectionAt`: a `@Middleware`-guarded
+/// path goes through the proxy's `registerIntrospection` (precomputing the model once), an unguarded one
+/// through `WireMVC.mountIntrospection`. No `mountIntrospectionAt` → empty. Registered before `finalize()`,
+/// so it's a real route the front layer wraps.
+func introspectionMount(bootstrap: ControllerDeclaration, factoryKeys: Set<String>, proxyProperty: String) -> String {
+    guard hasFunction(named: "mountIntrospectionAt", in: bootstrap) else { return "" }
+    if introspectionGuardConstructions(bootstrap: bootstrap, factoryKeys: factoryKeys).constructions.isEmpty {
+        return """
+            if let wireMVCIntrospectionPath = bootstrap.mountIntrospectionAt() {
+                try WireMVC.mountIntrospection(for: graph, into: &builder, at: wireMVCIntrospectionPath)
+            }
+            """
+    }
+    return """
+        if let wireMVCIntrospectionPath = bootstrap.mountIntrospectionAt() {
+            let wireMVCIntrospectionResponse = try WireMVCResponse.json(graph.introspect(), status: .ok)
+            graph.\(proxyProperty).registerIntrospection(into: &builder, at: wireMVCIntrospectionPath, response: wireMVCIntrospectionResponse)
+        }
+        """
+}
+
+/// Global tier `@Middleware` fold-entries (type-level, over `Handler`) — see ``middlewareFactoryConstructions``.
 func globalMiddlewareConstructions(
     bootstrap: ControllerDeclaration,
     factoryKeys: Set<String>
 ) -> (constructions: [String], diagnostics: [RouteCodegenDiagnostic]) {
+    middlewareFactoryConstructions(from: bootstrap.attributes, factoryKeys: factoryKeys, boxRole: "Handler")
+}
+
+/// Introspection-guard `@Middleware` fold-entries — the `@Middleware` on the `mountIntrospectionAt` method,
+/// folded over the route builder (`Builder`). Empty when there's no such method or it carries no `@Middleware`.
+func introspectionGuardConstructions(
+    bootstrap: ControllerDeclaration,
+    factoryKeys: Set<String>
+) -> (constructions: [String], diagnostics: [RouteCodegenDiagnostic]) {
+    guard let method = bootstrap.functions.first(where: { $0.name.text == "mountIntrospectionAt" }) else {
+        return ([], [])
+    }
+    return middlewareFactoryConstructions(from: method.attributes, factoryKeys: factoryKeys, boxRole: "Builder")
+}
+
+/// Read the `@Middleware` fold-entries from an attribute list. Only the **factory** form (`@Middleware(Key)`,
+/// generic over the box) is valid on the `@WireMVCBootstrap` root — `self._wireFactory_<key>.create(
+/// <boxRole>.RequestContext.self, …)` produces a middleware over the router's box, composing in the
+/// non-transforming generic chain. A by-type `@Middleware(T.self)` or a keyed graph binding is a concrete
+/// `Box<Fixed>` middleware that can't compose there, so it is diagnosed
+/// (``WireMVCDiagnostic/globalMiddlewareUnsupportedArgument``). `boxRole` names the generic parameter the
+/// consuming method exposes (`Handler` for `wrapGlobalMiddleware`, `Builder` for `registerIntrospection`).
+func middlewareFactoryConstructions(
+    from attributes: AttributeListSyntax,
+    factoryKeys: Set<String>,
+    boxRole: String
+) -> (constructions: [String], diagnostics: [RouteCodegenDiagnostic]) {
     var constructions: [String] = []
     var diagnostics: [RouteCodegenDiagnostic] = []
-    for case let .attribute(attr) in bootstrap.attributes
+    for case let .attribute(attr) in attributes
     where attr.attributeName.trimmedDescription == "Middleware" {
         guard
             let arguments = attr.arguments?.as(LabeledExprListSyntax.self),
@@ -127,7 +216,7 @@ func globalMiddlewareConstructions(
         let expression = first.expression.trimmedDescription
         if factoryKeys.contains(expression) {
             constructions.append(
-                "self.\(factoryPropertyName(forKey: expression)).create(Handler.RequestContext.self, Handler.Reader.self, Handler.ResponseSender.self)"
+                "self.\(factoryPropertyName(forKey: expression)).create(\(boxRole).RequestContext.self, \(boxRole).Reader.self, \(boxRole).ResponseSender.self)"
             )
         } else {
             diagnostics.append(RouteCodegenDiagnostic(.globalMiddlewareUnsupportedArgument(expression), at: attr))
@@ -177,6 +266,12 @@ private func functionThrows(named name: String, in declaration: ControllerDeclar
         return function.signature.effectSpecifiers?.throwsClause != nil
     }
     return false
+}
+
+/// Whether `declaration` declares a method with the given name — the Bootstrap's optional factory methods
+/// (`mountIntrospectionAt`) are recognised by name, as `createServer`/`createRouteBuilder` are.
+private func hasFunction(named name: String, in declaration: ControllerDeclaration) -> Bool {
+    declaration.functions.contains { $0.name.text == name }
 }
 
 /// Every nominal type carrying `@WireMVCBootstrap` in a parsed file, as a `ControllerDeclaration` (the
