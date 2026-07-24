@@ -25,12 +25,14 @@ func graphBindingPropertyName(_ typeName: String) -> String {
     return first.lowercased() + typeName.dropFirst()
 }
 
-/// The `@main` entry source for the single `@WireMVCBootstrap` composition root. The serve loop is
-/// inlined (concrete opaque locals, so the compiler infers the server/handler generics without any
-/// explicit threading); only the service run is factored into the non-generic `WireMVC.runServices`.
-/// `createServer` may throw (building a server configuration conventionally does), so the call is
-/// prefixed with `try` when the declaration is `throws`.
-func renderBootstrapEntry(
+/// The shared build sequence both generated entries inline — graph → bootstrap → server → builder →
+/// `apply` → registrations → `finalize()` → `wrapGlobalMiddleware`, producing the locals `server`,
+/// `services`, and the opaque `~Copyable` `wireMVCServed` handler. The handler can't be returned or
+/// stored (opaque `~Copyable`), so each entry inlines this and hands the locals straight to a generic
+/// serve helper by inference — the `@main` to `WireMVC.serve`, `withTestServer` to
+/// `WireMVCTesting.withTestServer`. `createServer` may throw (building a server configuration
+/// conventionally does), so the call is prefixed with `try` when the declaration is `throws`.
+private func bootstrapBuildLines(
     bootstrap: ControllerDeclaration,
     notFoundRegistration: String,
     factoryKeys: Set<String>
@@ -50,21 +52,69 @@ func renderBootstrapEntry(
     // The finalized router is wrapped once in the global-middleware front layer: the keyless proxy's
     // `wrapGlobalMiddleware` folds the Bootstrap's `@Middleware` factories around every request — matched
     // routes and the `@NotFound` fallback alike — or returns the router unchanged (identity) when there are
-    // none. Always called, so the `@main` is uniform.
+    // none. Always emitted, so the entries are uniform.
+    return """
+        let graph = try await Wire.bootstrap()
+        let bootstrap = graph.\(property)
+        let server = \(createServerTry)bootstrap.createServer()
+        var builder = bootstrap.createRouteBuilder(for: server)
+        let services = try WireMVC.apply(graph, to: &builder)
+        \(registrations)
+        let handler = builder.finalize()
+        let wireMVCServed = graph.\(proxyProperty).wrapGlobalMiddleware(handler)
+        """
+}
+
+/// The `@main` entry source for the single `@WireMVCBootstrap` composition root. The build is inlined
+/// (concrete opaque locals, so the compiler infers the server/handler generics without any explicit
+/// threading); only the service run is factored into the non-generic `WireMVC.runServices`.
+func renderBootstrapEntry(
+    bootstrap: ControllerDeclaration,
+    notFoundRegistration: String,
+    factoryKeys: Set<String>
+) -> String {
+    let buildLines = bootstrapBuildLines(
+        bootstrap: bootstrap,
+        notFoundRegistration: notFoundRegistration,
+        factoryKeys: factoryKeys
+    )
     let raw = """
         @main
         struct \(bootstrapEntryTypeName) {
             static func main() async throws {
-                let graph = try await Wire.bootstrap()
-                let bootstrap = graph.\(property)
-                let server = \(createServerTry)bootstrap.createServer()
-                var builder = bootstrap.createRouteBuilder(for: server)
-                let services = try WireMVC.apply(graph, to: &builder)
-                \(registrations)
-                let handler = builder.finalize()
-                let wireMVCServed = graph.\(proxyProperty).wrapGlobalMiddleware(handler)
+                \(buildLines)
                 try await WireMVC.serve(on: server, handler: wireMVCServed, services: services)
             }
+        }
+        """
+    return Parser.parse(source: raw).formatted().description
+}
+
+/// The generated `withTestServer` entry for the `@WireMVCBootstrap` composition root — a free function
+/// (module scope, alongside the `@main`) that inlines the SAME build as the `@main` and, instead of
+/// serving forever, hands the locals to `WireMVCTesting.withTestServer`: it serves on an ephemeral port,
+/// points a `TestClient` at the bound loopback port, runs `body(client)`, and cancels. Inlining is
+/// forced by the opaque `~Copyable` handler (it can't be returned from a shared `buildApplication`), so
+/// this duplicates the build the way the `@main` does — the string-building is the only thing shared,
+/// via ``bootstrapBuildLines``.
+func renderBootstrapTestEntry(
+    bootstrap: ControllerDeclaration,
+    notFoundRegistration: String,
+    factoryKeys: Set<String>
+) -> String {
+    let buildLines = bootstrapBuildLines(
+        bootstrap: bootstrap,
+        notFoundRegistration: notFoundRegistration,
+        factoryKeys: factoryKeys
+    )
+    // `TestClient` is referenced unqualified (the module and the `WireMVCTesting` enum share a name, so a
+    // qualified `WireMVCTesting.TestClient` would resolve against the enum); the `withTestServer` serve
+    // helper is a static on that enum, so it stays qualified — mirroring how the `@main` names `WireMVC`
+    // types unqualified but calls `WireMVC.serve`.
+    let raw = """
+        func withTestServer<R>(_ body: (TestClient) async throws -> R) async throws -> R {
+            \(buildLines)
+            return try await WireMVCTesting.withTestServer(on: server, handler: wireMVCServed, services: services, body)
         }
         """
     return Parser.parse(source: raw).formatted().description
