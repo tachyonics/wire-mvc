@@ -8,7 +8,14 @@ import WireMVCCodegen
 // WireGen (which emits the structs) — the two tools, one module, the field-name handshake. Until the A3
 // cutover wires it into a build, it stands alone (spike-23 proved the two-tool orchestration).
 //
-// CLI: WireMVCRouteGen <output-path> <source-files...>
+// CLI: WireMVCRouteGen <output-path> [--test-entry] [--import <Module>]... <source-files...>
+//
+// `--test-entry` marks a test consumer (one depending on the `WireMVCTesting` product): the generated
+// `@WireMVCBootstrap` entry becomes the `.wiremvc()` suite-trait factory (plus `import WireMVCTesting` and
+// `import Testing`) instead of the `@main`, which can't live in a test bundle. `--import <Module>` names a Wire-aware
+// dependency module re-parsed into this consumer, so the generated extensions can name its
+// `package`/`public` types (a test target re-composing the app). Both are optional; absent, the tool emits
+// the `@main` and no extra imports (the plain program-consumer path).
 //
 // On any route-shape diagnostic it prints compiler-style `file:line:col: error:` lines and exits
 // non-zero, writing no output — the build plugin treats a missing output as a failed generation step.
@@ -16,12 +23,35 @@ import WireMVCCodegen
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
     FileHandle.standardError.write(
-        Data("usage: WireMVCRouteGen <output-path> <source-files...>\n".utf8)
+        Data("usage: WireMVCRouteGen <output-path> [--test-entry] [--import <Module>]... <source-files...>\n".utf8)
     )
     exit(1)
 }
 let outputPath = arguments[1]
-let sourcePaths = Array(arguments.dropFirst(2))
+
+var testEntry = false
+var extraImports: [String] = []
+var sourcePaths: [String] = []
+let remaining = Array(arguments.dropFirst(2))
+var index = remaining.startIndex
+while index < remaining.endIndex {
+    let argument = remaining[index]
+    switch argument {
+    case "--test-entry":
+        testEntry = true
+    case "--import":
+        let next = remaining.index(after: index)
+        guard next < remaining.endIndex else {
+            FileHandle.standardError.write(Data("error: --import requires a module name\n".utf8))
+            exit(1)
+        }
+        extraImports.append(remaining[next])
+        index = next
+    default:
+        sourcePaths.append(argument)
+    }
+    index = remaining.index(after: index)
+}
 
 var files: [(path: String, source: String)] = []
 for path in sourcePaths {
@@ -33,7 +63,7 @@ for path in sourcePaths {
     }
 }
 
-let result = generateRouteContributors(files: files)
+let result = generateRouteContributors(files: files, testEntry: testEntry, extraImports: extraImports)
 
 if !result.diagnostics.isEmpty {
     for diagnostic in result.diagnostics {

@@ -76,8 +76,19 @@ struct WireMVCBuildPlugin: BuildToolPlugin {
         }
 
         // WireMVCRouteGen: the witness extensions. It scans every source for `@Controller` types, so it
-        // takes the same flat source set (consumer + Wire-aware dependencies).
-        let routeGenArguments = [routesURL.path] + allInputFiles.map(\.path)
+        // takes the same flat source set (consumer + Wire-aware dependencies). A test consumer — one that
+        // depends on the `WireMVCTesting` product — gets `--test-entry`, so a `@WireMVCBootstrap` root emits
+        // the `.wiremvc()` suite-trait factory (and links the test client) instead of the `@main`; a program
+        // consumer omits it and stays a plain executable. Each re-parsed Wire-aware dependency module is
+        // passed as `--import`, so the emitted extensions (running in this consumer) can name that module's
+        // `package`/`public` controllers, response types, and factories — needed when a test target
+        // re-composes the app's graph.
+        let testEntry = dependsOnWireMVCTesting(target)
+        let routeGenArguments =
+            [routesURL.path]
+            + (testEntry ? ["--test-entry"] : [])
+            + dependencyGroups.flatMap { ["--import", $0.module] }
+            + allInputFiles.map(\.path)
 
         return [
             .buildCommand(
@@ -95,5 +106,33 @@ struct WireMVCBuildPlugin: BuildToolPlugin {
                 outputFiles: [routesURL]
             ),
         ]
+    }
+
+    /// Whether `target` depends — directly or transitively — on the `WireMVCTesting` product, i.e. it is a
+    /// test consumer that should receive the `.wiremvc()` suite-trait factory (and link the test client)
+    /// rather than the `@main`. The app executable does not depend on it (nothing it depends on pulls it in), so it
+    /// reads `false`; each own-consumer test target names it directly, reading `true`.
+    private func dependsOnWireMVCTesting(_ target: Target) -> Bool {
+        var seen: Set<String> = []
+        func visit(_ dependencies: [TargetDependency]) -> Bool {
+            for dependency in dependencies {
+                let dependencyTargets: [Target]
+                switch dependency {
+                case .target(let dependencyTarget):
+                    dependencyTargets = [dependencyTarget]
+                case .product(let dependencyProduct):
+                    dependencyTargets = dependencyProduct.targets
+                @unknown default:
+                    dependencyTargets = []
+                }
+                for dependencyTarget in dependencyTargets {
+                    if dependencyTarget.name == "WireMVCTesting" { return true }
+                    guard seen.insert(dependencyTarget.name).inserted else { continue }
+                    if visit(dependencyTarget.dependencies) { return true }
+                }
+            }
+            return false
+        }
+        return visit(target.dependencies)
     }
 }

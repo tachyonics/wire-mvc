@@ -1,17 +1,21 @@
-import Wire
+package import Wire
 import WireMVC
 
 // One app-scoped controller. `@Singleton @Controller` is all it needs — WireMVC collates it and the
 // generated `@main` registers it. `GET /hello/{name}` → `{"message":"Hello, {name}!"}`.
+//
+// Generic over `G: Greeter` (the opaque-injection lift): `@Inject let greeter: G` resolves to whichever
+// binding produces the `Greeter` key — the app's `RealGreeter`, or a test target's `@Replaces` fake.
+// `package` (and package response/error types) so a same-package test target can re-compose it.
 
 @Singleton
 @Controller("/hello")
-struct HelloController {
-    @Inject let greeter: Greeter
+package struct HelloController<G: Greeter> {
+    @Inject let greeter: G
 
     @Get("/{name}")
     @JSONResponse
-    func hello(@Path name: String) -> Greeting {
+    package func hello(@Path name: String) -> Greeting {
         Greeting(message: greeter.greet(name))
     }
 
@@ -20,13 +24,16 @@ struct HelloController {
     // is the default tier folded into this route's terminal — so `GET /hello/tenant` returns 400.
     @Get("/tenant")
     @JSONResponse
-    func tenant() throws -> Greeting {
+    package func tenant() throws -> Greeting {
         throw TenantMissing()
     }
 }
 
-struct Greeting: Codable, Sendable {
-    let message: String
+package struct Greeting: Codable, Sendable {
+    package let message: String
+    package init(message: String) { self.message = message }
 }
 
-struct TenantMissing: Error {}
+package struct TenantMissing: Error {
+    package init() {}
+}
