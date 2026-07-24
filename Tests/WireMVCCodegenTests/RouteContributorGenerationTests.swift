@@ -130,6 +130,45 @@ struct RouteContributorGenerationTests {
         )
     }
 
+    /// The generated `.wiremvc()` suite-trait factory: a `SuiteTrait` extension whose `WireMVCSuiteTrait`
+    /// closure inlines the SAME build as the `@main` (graph → server → builder → apply → registrations →
+    /// finalize → `wrapGlobalMiddleware`) and hands the opaque handler to `WireMVCTesting.serveForSuite`
+    /// instead of serving forever. The build sequence is shared with the `@main` (both wrap
+    /// `bootstrapBuildLines`), so it matches the `@main`'s build lines.
+    @Test func bootstrapGeneratesTestServerEntry() {
+        let source = """
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                @Inject let config: ServerConfig
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        let decl = controller(source)
+        let fallback = renderNotFoundRegistration(bootstrap: decl).registration  // no @NotFound → synth-404
+        #expect(
+            renderBootstrapTestEntry(bootstrap: decl, notFoundRegistration: fallback, factoryKeys: []) == """
+                extension SuiteTrait where Self == WireMVCSuiteTrait {
+                    static func wiremvc() -> WireMVCSuiteTrait {
+                        WireMVCSuiteTrait { runTests in
+                            let graph = try await Wire.bootstrap()
+                            let bootstrap = graph.appBootstrap
+                            let server = try bootstrap.createServer()
+                            var builder = bootstrap.createRouteBuilder(for: server)
+                            let services = try WireMVC.apply(graph, to: &builder)
+                            builder.registerNotFound { _, _, _, _, responseSender in
+                                try await responseSender.sendAndFinish(HTTPResponse(status: .notFound))
+                            }
+                            let handler = builder.finalize()
+                            let wireMVCServed = graph._WireGlobalMiddleware_AppBootstrap.wrapGlobalMiddleware(handler)
+                            try await WireMVCTesting.serveForSuite(on: server, handler: wireMVCServed, services: services, runTests: runTests)
+                        }
+                    }
+                }
+                """
+        )
+    }
+
     /// A `mountIntrospectionAt() -> String?` method makes the generated `@main` register the graph's wiring
     /// model (`introspect()` JSON) at the returned path — before `finalize()`, so it's a real route.
     @Test func bootstrapEntryMountsIntrospection() {
@@ -309,7 +348,9 @@ struct RouteContributorGenerationTests {
     }
 
     /// End to end: `generateRouteContributors` finds `@WireMVCBootstrap`, emits the `@main` entry, and
-    /// adds `import Wire` (the entry calls `Wire.bootstrap()`).
+    /// adds `import Wire` (the entry calls `Wire.bootstrap()`). Default (no `testEntry`) is the program
+    /// consumer: the `@main` is emitted and the `.wiremvc()` suite-trait factory (and its `WireMVCTesting`/
+    /// `Testing` imports) is NOT — a production binary must not link the test client.
     @Test func generateEmitsBootstrapEntryAndWireImport() {
         let source = """
             import WireMVC
@@ -324,6 +365,44 @@ struct RouteContributorGenerationTests {
         #expect(rendered.source.contains("struct _WireMVCBootstrapEntry {"))
         #expect(rendered.source.contains("let bootstrap = graph.appBootstrap"))
         #expect(rendered.source.contains("import Wire\n"))
+        // The gate is closed by default: no test entry, no `WireMVCTesting`/`Testing` import.
+        #expect(!rendered.source.contains("static func wiremvc()"))
+        #expect(!rendered.source.contains("import WireMVCTesting"))
+        #expect(!rendered.source.contains("import Testing"))
+    }
+
+    /// A test consumer (`testEntry: true`) is the mirror image: the `.wiremvc()` suite-trait factory (and its
+    /// `WireMVCTesting` + `Testing` imports) is emitted, and the `@main` is NOT — a `@main` can't live in a
+    /// test bundle. `extraImports` become `import` lines so the emitted factory can name the re-composed app's types.
+    @Test func generateEmitsTestServerEntryUnderTestEntryGate() {
+        let source = """
+            import WireMVC
+            @Singleton
+            @WireMVCBootstrap
+            struct AppBootstrap {
+                func createServer() throws -> NIOHTTPServer { fatalError() }
+            }
+            """
+        let rendered = generateRouteContributors(
+            files: [("App.swift", source)],
+            testEntry: true,
+            extraImports: ["WireMVCBootstrapExample"]
+        )
+        #expect(rendered.diagnostics.isEmpty)
+        // The test entry replaces the `@main`.
+        #expect(!rendered.source.contains("@main"))
+        #expect(!rendered.source.contains("struct _WireMVCBootstrapEntry {"))
+        #expect(rendered.source.contains("extension SuiteTrait where Self == WireMVCSuiteTrait {"))
+        #expect(rendered.source.contains("static func wiremvc() -> WireMVCSuiteTrait {"))
+        #expect(rendered.source.contains("WireMVCSuiteTrait { runTests in"))
+        #expect(
+            rendered.source.contains(
+                "try await WireMVCTesting.serveForSuite(on: server, handler: wireMVCServed, services: services, runTests: runTests)"
+            )
+        )
+        #expect(rendered.source.contains("import WireMVCTesting\n"))
+        #expect(rendered.source.contains("import Testing\n"))
+        #expect(rendered.source.contains("import WireMVCBootstrapExample\n"))
     }
 
     /// M5.5 Phase 3: the `@WireMVCBootstrap` composition root's `@ErrorResponse` is the global default
