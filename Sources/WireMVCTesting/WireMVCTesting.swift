@@ -51,7 +51,9 @@ public struct WireMVCSuiteTrait: SuiteTrait, TestScoping {
     /// `.wiremvc()` factory, which inlines the build and calls ``WireMVCTesting/serveForSuite(on:handler:services:runTests:)``.
     let serve: @Sendable (_ runTests: @concurrent @Sendable () async throws -> Void) async throws -> Void
 
-    public init(serve: @escaping @Sendable (_ runTests: @concurrent @Sendable () async throws -> Void) async throws -> Void) {
+    public init(
+        serve: @escaping @Sendable (_ runTests: @concurrent @Sendable () async throws -> Void) async throws -> Void
+    ) {
         self.serve = serve
     }
 
@@ -97,7 +99,7 @@ public enum WireMVCTesting {
             group.addTask { try await WireMVC.runServices(services) }
             group.addTask { try await server.serve(handler: handler) }
             let port = try await server.wireMVCBoundPort
-            try await TestClient.$_current.withValue(TestClient(host: "127.0.0.1", port: port)) {
+            try await TestClient.$currentStorage.withValue(TestClient(host: "127.0.0.1", port: port)) {
                 try await runTests()
             }
             group.cancelAll()

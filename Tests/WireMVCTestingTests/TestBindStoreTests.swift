@@ -1,7 +1,12 @@
 import Foundation
 import Synchronization
 import Testing
+
 @testable import WireMVCTesting
+
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // H1 unit coverage for the doubles-supply runtime. H1 has no real `TestingKey`, so a dummy stands in for
 // the generated `_<Key>Doubles`.

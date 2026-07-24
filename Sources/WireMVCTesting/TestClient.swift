@@ -23,12 +23,12 @@ public struct TestClient: Sendable {
     /// The client for the running `@Suite(.wiremvc())` suite server, bound to its loopback port for the
     /// duration of the suite by ``WireMVCTesting/serveForSuite(on:handler:services:runTests:)``. Read it
     /// inside a suite-trait suite (e.g. `TestClient.current.post(...)`); `nil` outside such a suite.
-    @TaskLocal static var _current: TestClient?
+    @TaskLocal static var currentStorage: TestClient?
 
     /// The client for the running `@Suite(.wiremvc())` suite server. Available only inside a suite the
     /// trait scopes — outside one there is no server to reach, so this precondition-fails.
     public static var current: TestClient {
-        guard let client = _current else {
+        guard let client = currentStorage else {
             preconditionFailure("TestClient.current is only available inside an @Suite(.wiremvc()) suite")
         }
         return client

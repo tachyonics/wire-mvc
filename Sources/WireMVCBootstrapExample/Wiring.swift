@@ -9,7 +9,7 @@ package import Wire
 /// test target can supersede the app's real implementation with a fake via `@Replaces` — the
 /// opaque-injection lift: the controller is generic over `G: Greeter`, resolved to whichever binding
 /// produces the `Greeter` key.
-public protocol Greeter: Sendable {
+package protocol Greeter: Sendable {
     func greet(_ name: String) -> String
 }
 

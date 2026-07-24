@@ -1,12 +1,11 @@
 import BasicContainers
+package import HTTPAPIs
 import HTTPTypes
 import Logging
-import WireMVCRouter
-
-package import HTTPAPIs
 package import NIOHTTPServer
 package import Wire
 package import WireMVC
+import WireMVCRouter
 
 // The WireMVC-native composition root. `@Singleton` makes it a graph binding (its `@Inject` resolves);
 // `@WireMVCBootstrap` makes the plugin generate the program entry point (`@main`) for a program consumer,

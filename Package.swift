@@ -290,7 +290,7 @@ let package = Package(
         .testTarget(
             name: "WireMVCTestingTests",
             dependencies: [
-                "WireMVCTesting",
+                "WireMVCTesting"
             ],
             swiftSettings: proposalSettings
         ),
